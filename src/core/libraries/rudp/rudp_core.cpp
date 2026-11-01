@@ -159,7 +159,8 @@ int32_t Engine::SetOption(int32_t ctx, int32_t option, const void* value, size_t
     if (c == nullptr) {
         return ERROR_INVALID_CONTEXT_ID;
     }
-    if (option <= 0 || option >= 20 || option == 12 || option == 13 || option == OPTION_LAST_ERROR) {
+    if (option <= 0 || option >= 20 || option == 12 || option == 13 ||
+        option == OPTION_LAST_ERROR) {
         return ERROR_INVALID_OPTION;
     }
     if (value == nullptr || len < sizeof(int32_t)) {
@@ -418,8 +419,7 @@ int32_t Engine::Terminate(int32_t ctx, Millis now) {
     if (socket >= 0 && c->has_peer && c->remote_cid != 0 &&
         (c->state == State::Established || c->state == State::Connecting)) {
         SendControl(*c, PKT_FIN, now);
-        closing_.push_back(
-            {socket, c->peer, c->local_cid, c->remote_cid, tuning_.fin_repeats - 1});
+        closing_.push_back({socket, c->peer, c->local_cid, c->remote_cid, tuning_.fin_repeats - 1});
     }
     contexts_.erase(ctx);
     if (socket >= 0) {

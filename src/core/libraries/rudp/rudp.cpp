@@ -188,10 +188,9 @@ void RunActions(std::vector<Proto::Action>&& actions, bool fire) {
         switch (a.kind) {
         case Proto::Action::Kind::Send: {
             const auto sa = ToSockaddr(a.to);
-            const s32 r = Net::sceNetSendto(a.socket, a.data.data(), a.data.size(),
-                                            Net::ORBIS_NET_MSG_DONTWAIT,
-                                            reinterpret_cast<const Net::OrbisNetSockaddr*>(&sa),
-                                            sizeof(sa));
+            const s32 r = Net::sceNetSendto(
+                a.socket, a.data.data(), a.data.size(), Net::ORBIS_NET_MSG_DONTWAIT,
+                reinterpret_cast<const Net::OrbisNetSockaddr*>(&sa), sizeof(sa));
             if (r < 0) {
                 LOG_DEBUG(Lib_Rudp, "send on socket {} to {} failed: {:#x}", a.socket,
                           FormatPeer(a.to), static_cast<u32>(r));
@@ -254,10 +253,9 @@ void PollOnce(bool receive) {
             for (int i = 0; i < kMaxPacketsPerPoll; ++i) {
                 Net::OrbisNetSockaddrIn from{};
                 u32 fromlen = sizeof(from);
-                const s32 n = Net::sceNetRecvfrom(s, buf.data(), buf.size(),
-                                                  Net::ORBIS_NET_MSG_DONTWAIT,
-                                                  reinterpret_cast<Net::OrbisNetSockaddr*>(&from),
-                                                  &fromlen);
+                const s32 n =
+                    Net::sceNetRecvfrom(s, buf.data(), buf.size(), Net::ORBIS_NET_MSG_DONTWAIT,
+                                        reinterpret_cast<Net::OrbisNetSockaddr*>(&from), &fromlen);
                 if (n <= 0) {
                     break;
                 }
@@ -453,9 +451,10 @@ s32 PS4_SYSV_ABI sceRudpWrite(s32 ctx_id, const void* data, u64 len, u8 flags) {
     return r;
 }
 
-s32 PS4_SYSV_ABI sceRudpRead(s32 ctx_id, void* data, u64 len, u8 flags, [[maybe_unused]] void* read_info) {
-    const s32 r = WithEngine(
-        [&](Proto::Engine& e) { return e.Read(ctx_id, static_cast<u8*>(data), len); });
+s32 PS4_SYSV_ABI sceRudpRead(s32 ctx_id, void* data, u64 len, u8 flags,
+                             [[maybe_unused]] void* read_info) {
+    const s32 r =
+        WithEngine([&](Proto::Engine& e) { return e.Read(ctx_id, static_cast<u8*>(data), len); });
     LOG_TRACE(Lib_Rudp, "ctx {} len {} flags {:#x} -> {:#x}", ctx_id, len, flags,
               static_cast<u32>(r));
     return r;

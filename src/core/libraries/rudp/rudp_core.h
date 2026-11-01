@@ -115,11 +115,11 @@ struct PeerKey {
 struct Action {
     enum class Kind { Send, ContextEvent, SocketReleased };
     Kind kind = Kind::Send;
-    int32_t ctx_id = -1;  // ContextEvent
-    int32_t event = 0;    // ContextEvent
-    int32_t error = 0;    // ContextEvent
-    int32_t socket = -1;  // Send / SocketReleased
-    PeerKey to{};         // Send
+    int32_t ctx_id = -1;         // ContextEvent
+    int32_t event = 0;           // ContextEvent
+    int32_t error = 0;           // ContextEvent
+    int32_t socket = -1;         // Send / SocketReleased
+    PeerKey to{};                // Send
     std::vector<uint8_t> data{}; // Send
 };
 
@@ -198,8 +198,7 @@ public:
     int32_t Terminate(int32_t ctx, Millis now);
 
     // Transport side.
-    void OnPacket(int32_t socket, const PeerKey& from, const uint8_t* data, size_t len,
-                  Millis now);
+    void OnPacket(int32_t socket, const PeerKey& from, const uint8_t* data, size_t len, Millis now);
     void Tick(Millis now);
 
     std::set<int32_t> BoundSockets() const;

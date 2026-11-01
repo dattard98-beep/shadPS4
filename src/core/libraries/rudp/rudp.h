@@ -33,8 +33,7 @@ s32 PS4_SYSV_ABI sceRudpGetSizeReadable(s32 ctx_id);
 s32 PS4_SYSV_ABI sceRudpGetSizeWritable(s32 ctx_id);
 s32 PS4_SYSV_ABI sceRudpGetStatus();
 s32 PS4_SYSV_ABI sceRudpInit(void* mem_pool, u64 mem_pool_size);
-s32 PS4_SYSV_ABI sceRudpInitiate(s32 ctx_id, const Net::OrbisNetSockaddr* to, u32 tolen,
-                                 u16 vport);
+s32 PS4_SYSV_ABI sceRudpInitiate(s32 ctx_id, const Net::OrbisNetSockaddr* to, u32 tolen, u16 vport);
 s32 PS4_SYSV_ABI sceRudpListen();
 s32 PS4_SYSV_ABI sceRudpNetFlush();
 s32 PS4_SYSV_ABI sceRudpNetReceived(s32 soc, const u8* data, u64 datalen,
