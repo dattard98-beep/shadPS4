@@ -1044,7 +1044,16 @@ int PS4_SYSV_ABI sceNpMatching2SetRoomMemberDataInternal(
     StoreRequestCallback(ctx, requestOpt);
     const OrbisNpMatching2RequestId reqId = AllocRequestId();
     *requestId = reqId;
-    MmSetRoomMemberDataInternal(ctxId, reqId, *request);
+
+    // memberId 0 means "the calling member" on a real console. shadNet looks the id up
+    // literally and replies RoomMissing, so the change (e.g. a "ready" flag) is never stored
+    // or sent to the other members. Send our own member id instead.
+    OrbisNpMatching2SetRoomMemberDataInternalRequest resolved = *request;
+    if (resolved.memberId == 0 && ctx->my_member_id != 0) {
+        LOG_INFO(Lib_NpMatching2, "memberId 0 -> own member id {}", ctx->my_member_id);
+        resolved.memberId = ctx->my_member_id;
+    }
+    MmSetRoomMemberDataInternal(ctxId, reqId, resolved);
     return ORBIS_OK;
 }
 
