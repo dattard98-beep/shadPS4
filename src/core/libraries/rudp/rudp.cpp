@@ -226,7 +226,7 @@ s32 WithEngine(F&& op) {
     {
         std::scoped_lock lock{state.mutex};
         if (!state.initialized || !state.engine) {
-            return Proto::ERROR_NOT_INITIALIZED;
+            return Proto::RUDP_ERROR_NOT_INITIALIZED;
         }
         result = op(*state.engine);
         actions = state.engine->TakeActions();
@@ -301,11 +301,11 @@ s32 StartIoThread(u64 stack_size, s32 priority, u64 affinity) {
     {
         std::scoped_lock lock{state.mutex};
         if (!state.initialized) {
-            return Proto::ERROR_NOT_INITIALIZED;
+            return Proto::RUDP_ERROR_NOT_INITIALIZED;
         }
     }
     if (state.io_running.exchange(true)) {
-        return Proto::ERROR_THREAD_IN_USE;
+        return Proto::RUDP_ERROR_THREAD_IN_USE;
     }
     const s32 rc = Np::NpCommon::sceNpCreateThread(
         &state.io_thread, IoThreadMain, nullptr, priority, std::max(stack_size, kIoThreadMinStack),
@@ -314,7 +314,7 @@ s32 StartIoThread(u64 stack_size, s32 priority, u64 affinity) {
         LOG_ERROR(Lib_Rudp, "failed to create I/O thread: {:#x}", static_cast<u32>(rc));
         state.io_running.store(false);
         state.io_thread = nullptr;
-        return Proto::ERROR_THREAD;
+        return Proto::RUDP_ERROR_THREAD;
     }
     return ORBIS_OK;
 }
@@ -337,7 +337,7 @@ s32 PS4_SYSV_ABI sceRudpInit(void* mem_pool, u64 mem_pool_size) {
     auto& state = State();
     std::scoped_lock lock{state.mutex};
     if (state.initialized) {
-        return Proto::ERROR_ALREADY_INITIALIZED;
+        return Proto::RUDP_ERROR_ALREADY_INITIALIZED;
     }
     state.engine = std::make_unique<Proto::Engine>();
     state.contexts.clear();
@@ -354,7 +354,7 @@ s32 PS4_SYSV_ABI sceRudpEnd() {
     {
         std::scoped_lock lock{state.mutex};
         if (!state.initialized) {
-            return Proto::ERROR_NOT_INITIALIZED;
+            return Proto::RUDP_ERROR_NOT_INITIALIZED;
         }
     }
     StopIoThread();
@@ -373,7 +373,7 @@ s32 PS4_SYSV_ABI sceRudpSetEventHandler(void* handler, void* arg) {
     auto& state = State();
     std::scoped_lock lock{state.mutex};
     if (!state.initialized) {
-        return Proto::ERROR_NOT_INITIALIZED;
+        return Proto::RUDP_ERROR_NOT_INITIALIZED;
     }
     state.event_handler = reinterpret_cast<EventHandler>(handler);
     state.event_arg = arg;
@@ -393,12 +393,12 @@ s32 PS4_SYSV_ABI sceRudpEnableInternalIOThread2(u32 stack_size, u32 priority, u6
 
 s32 PS4_SYSV_ABI sceRudpCreateContext(void* handler, void* arg, s32* ctx_id) {
     if (ctx_id == nullptr) {
-        return Proto::ERROR_INVALID_ARGUMENT;
+        return Proto::RUDP_ERROR_INVALID_ARGUMENT;
     }
     auto& state = State();
     std::scoped_lock lock{state.mutex};
     if (!state.initialized || !state.engine) {
-        return Proto::ERROR_NOT_INITIALIZED;
+        return Proto::RUDP_ERROR_NOT_INITIALIZED;
     }
     const s32 id = state.engine->CreateContext();
     if (id < 0) {
@@ -433,7 +433,7 @@ s32 PS4_SYSV_ABI sceRudpInitiate(s32 ctx_id, const Net::OrbisNetSockaddr* to, u3
     Proto::PeerKey peer;
     if (!FromSockaddr(to, tolen, &peer)) {
         LOG_ERROR(Lib_Rudp, "ctx {}: unsupported address (len {})", ctx_id, tolen);
-        return Proto::ERROR_INVALID_ARGUMENT;
+        return Proto::RUDP_ERROR_INVALID_ARGUMENT;
     }
     LOG_INFO(Lib_Rudp, "ctx {} -> {} (rudp vport {})", ctx_id, FormatPeer(peer), vport);
     return WithEngine([&](Proto::Engine& e) { return e.Initiate(ctx_id, peer, Now()); });
@@ -445,7 +445,7 @@ s32 PS4_SYSV_ABI sceRudpWrite(s32 ctx_id, const void* data, u64 len, u8 flags) {
     });
     LOG_TRACE(Lib_Rudp, "ctx {} len {} flags {:#x} -> {:#x}", ctx_id, len, flags,
               static_cast<u32>(r));
-    if (r == Proto::ERROR_WOULDBLOCK) {
+    if (r == Proto::RUDP_ERROR_WOULDBLOCK) {
         LOG_WARNING(Lib_Rudp, "ctx {}: send buffer full, {} bytes not sent", ctx_id, len);
     }
     return r;
@@ -486,7 +486,7 @@ s32 PS4_SYSV_ABI sceRudpTerminate(s32 ctx_id) {
     {
         std::scoped_lock lock{state.mutex};
         if (!state.initialized || !state.engine) {
-            return Proto::ERROR_NOT_INITIALIZED;
+            return Proto::RUDP_ERROR_NOT_INITIALIZED;
         }
         result = state.engine->Terminate(ctx_id, Now());
         state.contexts.erase(ctx_id);
@@ -501,14 +501,14 @@ s32 PS4_SYSV_ABI sceRudpNetFlush() {
     // Sends are performed as soon as they are produced; nothing is held back.
     auto& state = State();
     std::scoped_lock lock{state.mutex};
-    return state.initialized ? ORBIS_OK : Proto::ERROR_NOT_INITIALIZED;
+    return state.initialized ? ORBIS_OK : Proto::RUDP_ERROR_NOT_INITIALIZED;
 }
 
 s32 PS4_SYSV_ABI sceRudpNetReceived(s32 soc, const u8* data, u64 datalen,
                                     const Net::OrbisNetSockaddr* from, u32 fromlen) {
     Proto::PeerKey peer;
     if (data == nullptr || !FromSockaddr(from, fromlen, &peer)) {
-        return Proto::ERROR_INVALID_ARGUMENT;
+        return Proto::RUDP_ERROR_INVALID_ARGUMENT;
     }
     return WithEngine([&](Proto::Engine& e) {
         e.OnPacket(soc, peer, data, datalen, Now());
@@ -521,7 +521,7 @@ s32 PS4_SYSV_ABI sceRudpProcessEvents([[maybe_unused]] u32 timeout_usec) {
     {
         std::scoped_lock lock{state.mutex};
         if (!state.initialized) {
-            return Proto::ERROR_NOT_INITIALIZED;
+            return Proto::RUDP_ERROR_NOT_INITIALIZED;
         }
     }
     // With the internal I/O thread running, that thread already does this work.

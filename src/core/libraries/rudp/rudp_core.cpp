@@ -136,7 +136,7 @@ void Engine::Emit(const Context& c, int32_t event, int32_t error) {
 
 int32_t Engine::CreateContext() {
     if (contexts_.size() >= 1024) {
-        return ERROR_TOO_MANY_CONTEXTS;
+        return RUDP_ERROR_TOO_MANY_CONTEXTS;
     }
     auto c = std::make_unique<Context>();
     c->id = next_ctx_id_++;
@@ -157,14 +157,14 @@ int32_t Engine::CreateContext() {
 int32_t Engine::SetOption(int32_t ctx, int32_t option, const void* value, size_t len) {
     Context* c = Find(ctx);
     if (c == nullptr) {
-        return ERROR_INVALID_CONTEXT_ID;
+        return RUDP_ERROR_INVALID_CONTEXT_ID;
     }
     if (option <= 0 || option >= 20 || option == 12 || option == 13 ||
         option == OPTION_LAST_ERROR) {
-        return ERROR_INVALID_OPTION;
+        return RUDP_ERROR_INVALID_OPTION;
     }
     if (value == nullptr || len < sizeof(int32_t)) {
-        return ERROR_INVALID_ARGUMENT;
+        return RUDP_ERROR_INVALID_ARGUMENT;
     }
     int32_t v = 0;
     std::memcpy(&v, value, sizeof(v));
@@ -188,19 +188,19 @@ int32_t Engine::SetOption(int32_t ctx, int32_t option, const void* value, size_t
         // which satisfies every combination of the DELIVERY/ORDER_CRITICAL flags.
         break;
     }
-    return OK;
+    return RUDP_OK;
 }
 
 int32_t Engine::GetOption(int32_t ctx, int32_t option, void* value, size_t len) const {
     const Context* c = Find(ctx);
     if (c == nullptr) {
-        return ERROR_INVALID_CONTEXT_ID;
+        return RUDP_ERROR_INVALID_CONTEXT_ID;
     }
     if (option <= 0 || option >= 20) {
-        return ERROR_INVALID_OPTION;
+        return RUDP_ERROR_INVALID_OPTION;
     }
     if (value == nullptr || len < sizeof(int32_t)) {
-        return ERROR_INVALID_ARGUMENT;
+        return RUDP_ERROR_INVALID_ARGUMENT;
     }
     int32_t v = c->raw_options[option];
     switch (option) {
@@ -226,43 +226,43 @@ int32_t Engine::GetOption(int32_t ctx, int32_t option, void* value, size_t len) 
         break;
     }
     std::memcpy(value, &v, sizeof(v));
-    return OK;
+    return RUDP_OK;
 }
 
 int32_t Engine::Bind(int32_t ctx, int32_t socket, uint16_t vport, uint8_t mux_mode) {
     Context* c = Find(ctx);
     if (c == nullptr) {
-        return ERROR_INVALID_CONTEXT_ID;
+        return RUDP_ERROR_INVALID_CONTEXT_ID;
     }
     if (socket < 0) {
-        return ERROR_INVALID_SOCKET;
+        return RUDP_ERROR_INVALID_SOCKET;
     }
     if (c->socket >= 0) {
-        return ERROR_ALREADY_BOUND;
+        return RUDP_ERROR_ALREADY_BOUND;
     }
     c->socket = socket;
     c->vport = vport;
     c->mux_mode = mux_mode;
     sockets_in_use_.insert(socket);
-    return OK;
+    return RUDP_OK;
 }
 
 int32_t Engine::Initiate(int32_t ctx, const PeerKey& peer, Millis now) {
     Context* c = Find(ctx);
     if (c == nullptr) {
-        return ERROR_INVALID_CONTEXT_ID;
+        return RUDP_ERROR_INVALID_CONTEXT_ID;
     }
     if (c->socket < 0) {
-        return ERROR_NOT_BOUND;
+        return RUDP_ERROR_NOT_BOUND;
     }
     if (c->state == State::Established) {
-        return ERROR_ALREADY_ESTABLISHED;
+        return RUDP_ERROR_ALREADY_ESTABLISHED;
     }
     if (c->state == State::Connecting) {
-        return ERROR_IN_PROGRESS;
+        return RUDP_ERROR_IN_PROGRESS;
     }
     if (c->state != State::Idle) {
-        return ERROR_NOT_ACCEPTABLE;
+        return RUDP_ERROR_NOT_ACCEPTABLE;
     }
     c->peer = peer;
     c->has_peer = true;
@@ -271,31 +271,31 @@ int32_t Engine::Initiate(int32_t ctx, const PeerKey& peer, Millis now) {
     c->last_rx = now;
     SendControl(*c, PKT_SYN, now);
     c->last_syn = now;
-    return OK;
+    return RUDP_OK;
 }
 
 int32_t Engine::Write(int32_t ctx, const uint8_t* data, size_t len, Millis now) {
     Context* c = Find(ctx);
     if (c == nullptr) {
-        return ERROR_INVALID_CONTEXT_ID;
+        return RUDP_ERROR_INVALID_CONTEXT_ID;
     }
     if (c->state == State::Error) {
-        return c->last_error != 0 ? c->last_error : ERROR_CONN_RESET;
+        return c->last_error != 0 ? c->last_error : RUDP_ERROR_CONN_RESET;
     }
     if (c->state == State::Closed) {
-        return ERROR_CONN_RESET;
+        return RUDP_ERROR_CONN_RESET;
     }
     if (c->state != State::Established) {
-        return ERROR_NOT_ACCEPTABLE;
+        return RUDP_ERROR_NOT_ACCEPTABLE;
     }
     if (len == 0 || data == nullptr) {
-        return ERROR_INVALID_ARGUMENT;
+        return RUDP_ERROR_INVALID_ARGUMENT;
     }
     if (len > kMaxMessage) {
-        return ERROR_MSG_TOO_LARGE;
+        return RUDP_ERROR_MSG_TOO_LARGE;
     }
     if (c->queued_bytes + len > c->send_buffer) {
-        return ERROR_WOULDBLOCK;
+        return RUDP_ERROR_WOULDBLOCK;
     }
     size_t offset = 0;
     while (offset < len) {
@@ -322,19 +322,19 @@ int32_t Engine::Write(int32_t ctx, const uint8_t* data, size_t len, Millis now) 
 int32_t Engine::Read(int32_t ctx, uint8_t* buf, size_t len) {
     Context* c = Find(ctx);
     if (c == nullptr) {
-        return ERROR_INVALID_CONTEXT_ID;
+        return RUDP_ERROR_INVALID_CONTEXT_ID;
     }
     if (c->messages.empty()) {
         if (c->state == State::Closed) {
-            return ERROR_END_OF_DATA;
+            return RUDP_ERROR_END_OF_DATA;
         }
         if (c->state == State::Error) {
-            return c->last_error != 0 ? c->last_error : ERROR_CONN_RESET;
+            return c->last_error != 0 ? c->last_error : RUDP_ERROR_CONN_RESET;
         }
-        return ERROR_WOULDBLOCK;
+        return RUDP_ERROR_WOULDBLOCK;
     }
     if (buf == nullptr && len != 0) {
-        return ERROR_INVALID_ARGUMENT;
+        return RUDP_ERROR_INVALID_ARGUMENT;
     }
     std::vector<uint8_t> msg = std::move(c->messages.front());
     c->messages.pop_front();
@@ -349,7 +349,7 @@ int32_t Engine::Read(int32_t ctx, uint8_t* buf, size_t len) {
 int32_t Engine::GetSizeReadable(int32_t ctx) const {
     const Context* c = Find(ctx);
     if (c == nullptr) {
-        return ERROR_INVALID_CONTEXT_ID;
+        return RUDP_ERROR_INVALID_CONTEXT_ID;
     }
     return static_cast<int32_t>(std::min<size_t>(c->readable_bytes, INT32_MAX));
 }
@@ -357,7 +357,7 @@ int32_t Engine::GetSizeReadable(int32_t ctx) const {
 int32_t Engine::GetNumberOfPacketsToRead(int32_t ctx) const {
     const Context* c = Find(ctx);
     if (c == nullptr) {
-        return ERROR_INVALID_CONTEXT_ID;
+        return RUDP_ERROR_INVALID_CONTEXT_ID;
     }
     return static_cast<int32_t>(std::min<size_t>(c->messages.size(), INT32_MAX));
 }
@@ -365,7 +365,7 @@ int32_t Engine::GetNumberOfPacketsToRead(int32_t ctx) const {
 int32_t Engine::GetSizeWritable(int32_t ctx) const {
     const Context* c = Find(ctx);
     if (c == nullptr) {
-        return ERROR_INVALID_CONTEXT_ID;
+        return RUDP_ERROR_INVALID_CONTEXT_ID;
     }
     const size_t free = c->send_buffer > c->queued_bytes ? c->send_buffer - c->queued_bytes : 0;
     return static_cast<int32_t>(std::min<size_t>(free, INT32_MAX));
@@ -374,7 +374,7 @@ int32_t Engine::GetSizeWritable(int32_t ctx) const {
 int32_t Engine::GetState(int32_t ctx, State* state, int32_t* last_error) const {
     const Context* c = Find(ctx);
     if (c == nullptr) {
-        return ERROR_INVALID_CONTEXT_ID;
+        return RUDP_ERROR_INVALID_CONTEXT_ID;
     }
     if (state != nullptr) {
         *state = c->state;
@@ -382,38 +382,38 @@ int32_t Engine::GetState(int32_t ctx, State* state, int32_t* last_error) const {
     if (last_error != nullptr) {
         *last_error = c->last_error;
     }
-    return OK;
+    return RUDP_OK;
 }
 
 int32_t Engine::GetRemote(int32_t ctx, PeerKey* peer) const {
     const Context* c = Find(ctx);
     if (c == nullptr) {
-        return ERROR_INVALID_CONTEXT_ID;
+        return RUDP_ERROR_INVALID_CONTEXT_ID;
     }
     if (!c->has_peer) {
-        return ERROR_NOT_ACCEPTABLE;
+        return RUDP_ERROR_NOT_ACCEPTABLE;
     }
     *peer = c->peer;
-    return OK;
+    return RUDP_OK;
 }
 
 int32_t Engine::Flush(int32_t ctx) {
     Context* c = Find(ctx);
     if (c == nullptr) {
-        return ERROR_INVALID_CONTEXT_ID;
+        return RUDP_ERROR_INVALID_CONTEXT_ID;
     }
     if (c->state != State::Established) {
-        return ERROR_NOT_ACCEPTABLE;
+        return RUDP_ERROR_NOT_ACCEPTABLE;
     }
     // FLUSHED is reported from Tick() once every written byte has been acknowledged.
     c->flush_requested = true;
-    return OK;
+    return RUDP_OK;
 }
 
 int32_t Engine::Terminate(int32_t ctx, Millis now) {
     Context* c = Find(ctx);
     if (c == nullptr) {
-        return ERROR_INVALID_CONTEXT_ID;
+        return RUDP_ERROR_INVALID_CONTEXT_ID;
     }
     const int32_t socket = c->socket;
     if (socket >= 0 && c->has_peer && c->remote_cid != 0 &&
@@ -425,7 +425,7 @@ int32_t Engine::Terminate(int32_t ctx, Millis now) {
     if (socket >= 0) {
         MaybeReleaseSocket(socket);
     }
-    return OK;
+    return RUDP_OK;
 }
 
 void Engine::MaybeReleaseSocket(int32_t socket) {
@@ -565,7 +565,7 @@ void Engine::OnPacket(int32_t socket, const PeerKey& from, const uint8_t* data, 
     // A known peer that restarted its side (new connection id) resets the connection.
     if (c->remote_cid != 0 && h.src_id != c->remote_cid) {
         if (c->state == State::Established && h.type == PKT_SYN) {
-            Fail(*c, ERROR_CONN_RESET);
+            Fail(*c, RUDP_ERROR_CONN_RESET);
         }
         return;
     }
@@ -710,7 +710,7 @@ void Engine::Deliver(Context& c, Segment&& s) {
 void Engine::TickContext(Context& c, Millis now) {
     if (c.state == State::Connecting) {
         if (now - c.connect_start >= c.connect_timeout) {
-            Fail(c, ERROR_CONN_TIMEOUT);
+            Fail(c, RUDP_ERROR_CONN_TIMEOUT);
             return;
         }
         if (now - c.last_syn >= tuning_.syn_interval) {
@@ -723,7 +723,7 @@ void Engine::TickContext(Context& c, Millis now) {
         return;
     }
     if (now - c.last_rx >= c.keepalive_timeout) {
-        Fail(c, ERROR_KEEP_ALIVE_FAILURE);
+        Fail(c, RUDP_ERROR_KEEP_ALIVE_FAILURE);
         return;
     }
     // Retransmit what has timed out, or what the peer reported missing.

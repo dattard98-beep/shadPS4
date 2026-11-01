@@ -22,34 +22,34 @@ namespace Libraries::Rudp::Proto {
 
 // Error codes returned to the guest (same values as the real library).
 enum Error : int32_t {
-    OK = 0,
-    ERROR_NOT_INITIALIZED = static_cast<int32_t>(0x80770001),
-    ERROR_ALREADY_INITIALIZED = static_cast<int32_t>(0x80770002),
-    ERROR_INVALID_CONTEXT_ID = static_cast<int32_t>(0x80770003),
-    ERROR_INVALID_ARGUMENT = static_cast<int32_t>(0x80770004),
-    ERROR_INVALID_OPTION = static_cast<int32_t>(0x80770005),
-    ERROR_INVALID_MUXMODE = static_cast<int32_t>(0x80770006),
-    ERROR_MEMORY = static_cast<int32_t>(0x80770007),
-    ERROR_INTERNAL = static_cast<int32_t>(0x80770008),
-    ERROR_CONN_RESET = static_cast<int32_t>(0x80770009),
-    ERROR_CONN_REFUSED = static_cast<int32_t>(0x8077000a),
-    ERROR_CONN_TIMEOUT = static_cast<int32_t>(0x8077000b),
-    ERROR_THREAD = static_cast<int32_t>(0x8077000f),
-    ERROR_THREAD_IN_USE = static_cast<int32_t>(0x80770010),
-    ERROR_NOT_ACCEPTABLE = static_cast<int32_t>(0x80770011),
-    ERROR_MSG_TOO_LARGE = static_cast<int32_t>(0x80770012),
-    ERROR_NOT_BOUND = static_cast<int32_t>(0x80770013),
-    ERROR_INVALID_VPORT = static_cast<int32_t>(0x80770015),
-    ERROR_WOULDBLOCK = static_cast<int32_t>(0x80770016),
-    ERROR_INVALID_SOCKET = static_cast<int32_t>(0x80770019),
-    ERROR_BUFFER_TOO_SMALL = static_cast<int32_t>(0x8077001a),
-    ERROR_ALREADY_BOUND = static_cast<int32_t>(0x8077001d),
-    ERROR_TOO_MANY_CONTEXTS = static_cast<int32_t>(0x80770020),
-    ERROR_IN_PROGRESS = static_cast<int32_t>(0x80770021),
-    ERROR_NO_EVENT_HANDLER = static_cast<int32_t>(0x80770022),
-    ERROR_END_OF_DATA = static_cast<int32_t>(0x80770024),
-    ERROR_ALREADY_ESTABLISHED = static_cast<int32_t>(0x80770025),
-    ERROR_KEEP_ALIVE_FAILURE = static_cast<int32_t>(0x80770026),
+    RUDP_OK = 0,
+    RUDP_ERROR_NOT_INITIALIZED = static_cast<int32_t>(0x80770001),
+    RUDP_ERROR_ALREADY_INITIALIZED = static_cast<int32_t>(0x80770002),
+    RUDP_ERROR_INVALID_CONTEXT_ID = static_cast<int32_t>(0x80770003),
+    RUDP_ERROR_INVALID_ARGUMENT = static_cast<int32_t>(0x80770004),
+    RUDP_ERROR_INVALID_OPTION = static_cast<int32_t>(0x80770005),
+    RUDP_ERROR_INVALID_MUXMODE = static_cast<int32_t>(0x80770006),
+    RUDP_ERROR_MEMORY = static_cast<int32_t>(0x80770007),
+    RUDP_ERROR_INTERNAL = static_cast<int32_t>(0x80770008),
+    RUDP_ERROR_CONN_RESET = static_cast<int32_t>(0x80770009),
+    RUDP_ERROR_CONN_REFUSED = static_cast<int32_t>(0x8077000a),
+    RUDP_ERROR_CONN_TIMEOUT = static_cast<int32_t>(0x8077000b),
+    RUDP_ERROR_THREAD = static_cast<int32_t>(0x8077000f),
+    RUDP_ERROR_THREAD_IN_USE = static_cast<int32_t>(0x80770010),
+    RUDP_ERROR_NOT_ACCEPTABLE = static_cast<int32_t>(0x80770011),
+    RUDP_ERROR_MSG_TOO_LARGE = static_cast<int32_t>(0x80770012),
+    RUDP_ERROR_NOT_BOUND = static_cast<int32_t>(0x80770013),
+    RUDP_ERROR_INVALID_VPORT = static_cast<int32_t>(0x80770015),
+    RUDP_ERROR_WOULDBLOCK = static_cast<int32_t>(0x80770016),
+    RUDP_ERROR_INVALID_SOCKET = static_cast<int32_t>(0x80770019),
+    RUDP_ERROR_BUFFER_TOO_SMALL = static_cast<int32_t>(0x8077001a),
+    RUDP_ERROR_ALREADY_BOUND = static_cast<int32_t>(0x8077001d),
+    RUDP_ERROR_TOO_MANY_CONTEXTS = static_cast<int32_t>(0x80770020),
+    RUDP_ERROR_IN_PROGRESS = static_cast<int32_t>(0x80770021),
+    RUDP_ERROR_NO_EVENT_HANDLER = static_cast<int32_t>(0x80770022),
+    RUDP_ERROR_END_OF_DATA = static_cast<int32_t>(0x80770024),
+    RUDP_ERROR_ALREADY_ESTABLISHED = static_cast<int32_t>(0x80770025),
+    RUDP_ERROR_KEEP_ALIVE_FAILURE = static_cast<int32_t>(0x80770026),
 };
 
 // Context events passed to the per-context handler.
@@ -180,7 +180,7 @@ public:
         return tuning_;
     }
 
-    // Guest API. Each returns OK/positive or a negative Error. Events and packets produced
+    // Guest API. Each returns RUDP_OK/positive or a negative Error. Events and packets produced
     // by the call are appended to the action list fetched with TakeActions().
     int32_t CreateContext();
     int32_t SetOption(int32_t ctx, int32_t option, const void* value, size_t len);
