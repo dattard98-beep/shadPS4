@@ -894,7 +894,8 @@ void SendPredictedPortProbe(s32 transport_id) {
         return;
     }
     if (round == kDirectRounds) {
-        LOG_INFO(Lib_NpSignaling, "Signaling: no reply from {:#x}:{} yet; also probing nearby ports",
+        LOG_INFO(Lib_NpSignaling,
+                 "Signaling: no reply from {:#x}:{} yet; also probing nearby ports",
                  transport->addr, Net::sceNetNtohs(transport->port));
     }
     const u32 k = (round - kDirectRounds) % 16;
