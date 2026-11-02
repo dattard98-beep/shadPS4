@@ -32,6 +32,8 @@ namespace Libraries::Np::NpMatching2 {
 
 namespace {
 
+void ProcessOpenHostSearchReply(shadnet::SearchRoomReply& reply);
+
 struct PendingRequest {
     OrbisNpMatching2ContextId ctx_id = 0;
     OrbisNpMatching2RequestId req_id = 0;
