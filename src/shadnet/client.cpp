@@ -4,6 +4,8 @@
 
 #include <algorithm>
 #include <chrono>
+#include <string>
+#include <string_view>
 #include <thread>
 #include <fmt/format.h>
 
@@ -13,6 +15,30 @@
 #include "common/scm_rev.h"
 #include "common/thread.h"
 #include "shadnet.pb.h"
+
+namespace {
+
+// shadNet keeps one matchmaking room pool per title id unless its worlds.cfg groups the
+// regional releases together. For games whose releases are not grouped there, report one
+// shared id so players on different regions can find each other's rooms. Scores and
+// trophies are keyed by the NP communication id, so they are unaffected.
+std::string MatchingTitleId(std::string_view serial) {
+    struct Alias {
+        std::string_view serial;
+        std::string_view shared;
+    };
+    static constexpr Alias kAliases[] = {
+        {"CUSA02058", "CUSA02046"}, // Godzilla
+    };
+    for (const auto& alias : kAliases) {
+        if (serial == alias.serial) {
+            return std::string(alias.shared);
+        }
+    }
+    return std::string(serial);
+}
+
+} // namespace
 
 #ifdef _WIN32
 #pragma comment(lib, "Ws2_32.lib")
@@ -203,7 +229,7 @@ void ShadNetClient::ConnectThread() {
     req.set_password(m_password);
     if (!m_token.empty())
         req.set_token(m_token);
-    req.set_title_id(std::string(Common::ElfInfo::Instance().GameSerial()));
+    req.set_title_id(MatchingTitleId(Common::ElfInfo::Instance().GameSerial()));
     req.set_title_name(std::string(Common::ElfInfo::Instance().Title()));
     // Appear-Offline preference. shadNet handles us as offline for everyone else while set.
     req.set_appear_offline(m_appear_offline);
