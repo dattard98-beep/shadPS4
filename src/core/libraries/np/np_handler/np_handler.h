@@ -400,6 +400,7 @@ private:
 
     // Start the health-monitor worker thread if not already running (idempotent).
     void StartWorker();
+    void RetryWhenPreviousSessionEnds(s32 user_id, const std::string& npid);
 
     // Disconnect and remove one user's client.
     void DisconnectUser(s32 user_id);

@@ -319,6 +319,12 @@ bool NpHandler::ConnectUser(s32 user_id, const std::string& host, u16 port, cons
                   static_cast<int>(auth_state));
         handle_protocol_mismatch(auth_state);
         client->Stop();
+        if (auth_state == ShadNet::ShadNetState::FailureAlreadyIn) {
+            // The server still holds an earlier session for this account, usually left by an
+            // emulator that crashed or was killed. It goes away once the server notices, so keep
+            // retrying in the background instead of staying offline for the whole run.
+            RetryWhenPreviousSessionEnds(user_id, npid);
+        }
         return false;
     }
 
@@ -477,6 +483,34 @@ void NpHandler::WorkerThread() {
 
         TryReconnect();
     }
+}
+
+void NpHandler::RetryWhenPreviousSessionEnds(s32 user_id, const std::string& npid) {
+    if (!EmulatorSettings.IsShadNetEnabled())
+        return;
+    constexpr auto kRetryInterval = std::chrono::milliseconds(15000);
+    bool first = false;
+    {
+        std::lock_guard lock(m_mutex_clients);
+        if (m_reconnect.find(user_id) == m_reconnect.end()) {
+            auto& st = m_reconnect[user_id];
+            st.backoff = kRetryInterval;
+            st.next_attempt = std::chrono::steady_clock::now() + kRetryInterval;
+            first = true;
+        }
+    }
+    if (first) {
+        LOG_WARNING(NpHandler,
+                    "user_id={} npid='{}': a previous shadNet session is still open on the "
+                    "server; retrying sign-in automatically",
+                    user_id, npid);
+        ImGui::ShadNetNotify::Push(
+            ImGui::ShadNetNotify::Kind::Warning,
+            fmt::format("{} is still signed in from an earlier session (did shadPS4 crash or is it "
+                        "still running?). Retrying sign-in automatically...",
+                        npid));
+    }
+    StartWorker();
 }
 
 void NpHandler::MarkForReconnect(s32 user_id) {

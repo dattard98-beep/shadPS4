@@ -4,7 +4,9 @@
 #include <algorithm>
 #include <chrono>
 #include <cstring>
+#include <map>
 #include <memory>
+#include <mutex>
 #include <string>
 
 #include "common/logging/log.h"
@@ -128,6 +130,82 @@ void QueueMatching2DeadForRoomPeers(ContextObject& ctx, OrbisNpMatching2RoomId r
                  ctx.ctx_id, room_id, member_id, static_cast<u32>(error_code));
     }
     SignalingHandler::StopMatching2(ctx, room_id, error_code);
+}
+
+namespace {
+
+// How long a joined room may go without a direct connection to any other member before it is
+// treated as dead, and how long a dead room stays hidden from searches.
+constexpr auto kGhostRoomTimeout = std::chrono::seconds(20);
+constexpr auto kGhostRoomHideTime = std::chrono::minutes(10);
+
+std::mutex g_ghost_mutex;
+std::map<OrbisNpMatching2RoomId, std::chrono::steady_clock::time_point> g_ghost_rooms;
+
+void MarkGhostRoom(OrbisNpMatching2RoomId room_id) {
+    std::lock_guard lock(g_ghost_mutex);
+    g_ghost_rooms[room_id] = std::chrono::steady_clock::now() + kGhostRoomHideTime;
+}
+
+} // namespace
+
+bool IsGhostRoom(OrbisNpMatching2RoomId room_id) {
+    std::lock_guard lock(g_ghost_mutex);
+    const auto now = std::chrono::steady_clock::now();
+    for (auto it = g_ghost_rooms.begin(); it != g_ghost_rooms.end();) {
+        it = it->second <= now ? g_ghost_rooms.erase(it) : std::next(it);
+    }
+    return g_ghost_rooms.find(room_id) != g_ghost_rooms.end();
+}
+
+void CheckGhostRooms() {
+    const auto now = std::chrono::steady_clock::now();
+    for (u32 id = 1; id <= ContextManager::kMaxContexts; ++id) {
+        auto ctx = NpHandler::GetInstance().GetMatching2ContextManager().Get(
+            static_cast<OrbisNpMatching2ContextId>(id));
+        if (!ctx) {
+            continue;
+        }
+        OrbisNpMatching2RoomId room_id = 0;
+        {
+            auto cache = NpHandler::GetInstance().LockMatching2Cache(ctx->ctx_id);
+            // Only rooms we joined (the owner waits for others; it is not a ghost).
+            if (ctx->room_id == 0 || ctx->is_room_owner || ctx->room_ghost_handled ||
+                ctx->room_joined_at == std::chrono::steady_clock::time_point{} ||
+                now - ctx->room_joined_at < kGhostRoomTimeout) {
+                continue;
+            }
+            const auto room_it = cache->rooms.find(ctx->room_id);
+            if (room_it == cache->rooms.end()) {
+                continue;
+            }
+            bool reached_anyone = false;
+            bool has_other_members = false;
+            for (const auto& [member_id, member] : room_it->second.members) {
+                if (member_id == 0 || member_id == ctx->my_member_id) {
+                    continue;
+                }
+                has_other_members = true;
+                const auto peer_it = cache->peers.find(member_id);
+                if (peer_it != cache->peers.end() && peer_it->second.sent_established) {
+                    reached_anyone = true;
+                    break;
+                }
+            }
+            if (reached_anyone || !has_other_members) {
+                ctx->room_ghost_handled = true; // connected fine (or alone): stop checking
+                continue;
+            }
+            ctx->room_ghost_handled = true;
+            room_id = ctx->room_id;
+        }
+        LOG_WARNING(Lib_NpMatching2,
+                    "room {} looks dead: no member reachable {}s after joining; reporting it "
+                    "to the game and hiding it from searches",
+                    room_id, kGhostRoomTimeout.count());
+        MarkGhostRoom(room_id);
+        QueueMatching2DeadForRoomPeers(*ctx, room_id, ORBIS_NP_MATCHING2_SIGNALING_ERROR_TIMEOUT);
+    }
 }
 
 void StartMatching2SignalingRuntime() {

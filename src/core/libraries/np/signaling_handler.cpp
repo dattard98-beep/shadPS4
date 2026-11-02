@@ -1265,6 +1265,7 @@ void ThreadMain() {
     LOG_DEBUG(Lib_NpSignaling, "Signaling runtime thread started");
     auto& state = NpHandler::GetInstance().GetSignalingState();
     auto last_publish = std::chrono::steady_clock::time_point{};
+    auto last_ghost_check = std::chrono::steady_clock::time_point{};
     while (!state.runtime_stop.load(std::memory_order_relaxed)) {
         if (!NpSignaling::Transport::EnsureTransport()) {
             std::this_thread::sleep_for(std::chrono::milliseconds(50));
@@ -1277,6 +1278,10 @@ void ThreadMain() {
         StepPendingConnections();
         SendEchoPings();
         SyncMatching2Peers();
+        if (now - last_ghost_check >= std::chrono::seconds(1)) {
+            last_ghost_check = now;
+            NpMatching2::CheckGhostRooms();
+        }
 
         if (last_publish.time_since_epoch().count() == 0 ||
             now - last_publish >= kStunPingInterval) {

@@ -16,6 +16,7 @@
 #include "core/libraries/np/np_error.h"
 #include "core/libraries/np/np_handler/np_handler.h"
 #include "core/libraries/np/np_matching2/np_matching2_internal.h"
+#include "core/libraries/np/np_matching2/np_matching2_signaling.h"
 #include "shadnet.pb.h"
 
 namespace Libraries::Np::NpMatching2 {
@@ -202,6 +203,8 @@ void BuildCreateJoinRoomPayloadCommon(ContextObject& ctx, CallbackPayload& p,
     ctx.room_id = room.roomId;
     ctx.my_member_id = static_cast<OrbisNpMatching2RoomMemberId>(resp.me_member_id());
     ctx.is_room_owner = rc.owner;
+    ctx.room_joined_at = std::chrono::steady_clock::now();
+    ctx.room_ghost_handled = false;
     for (const auto& g : p.room_groups) {
         rc.groups[g.id] = g;
     }
@@ -389,6 +392,8 @@ void* BuildLeaveRoomPayload(ContextObject& ctx, CallbackPayload& p,
         ctx.room_id = 0;
         ctx.my_member_id = 0;
         ctx.is_room_owner = false;
+        ctx.room_joined_at = {};
+        ctx.room_ghost_handled = false;
     }
 
     p.request_data = p.leave_room_response.get();
@@ -428,11 +433,22 @@ void* BuildSearchRoomPayload(ContextObject& ctx, CallbackPayload& p,
     p.Reset();
     ReserveExternalRoomPayloadStorage(p, resp);
 
-    const int room_count = resp.rooms_size();
+    // Hide rooms recently found to be dead (host never reachable), so the game does not keep
+    // joining a room left behind by a crashed session.
+    std::vector<int> visible;
+    visible.reserve(static_cast<size_t>(resp.rooms_size()));
+    for (int i = 0; i < resp.rooms_size(); ++i) {
+        if (IsGhostRoom(resp.rooms(i).room_id())) {
+            LOG_INFO(Lib_NpMatching2, "Search: hiding dead room {}", resp.rooms(i).room_id());
+            continue;
+        }
+        visible.push_back(i);
+    }
+    const int room_count = static_cast<int>(visible.size());
     LOG_INFO(Lib_NpMatching2, "Search response rooms={}", room_count);
     p.room_data_external.resize(room_count);
     for (int i = 0; i < room_count; ++i) {
-        const auto& r = resp.rooms(i);
+        const auto& r = resp.rooms(visible[i]);
         LOG_DEBUG(Lib_NpMatching2,
                   "  room[{}] id={} max={} cur={} public/open={}/{} private/open={}/{} "
                   "flags={:#x} groups={} searchInt={} searchBin={} extBin={}",

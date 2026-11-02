@@ -191,6 +191,10 @@ struct ContextObject : std::enable_shared_from_this<ContextObject> {
     OrbisNpMatching2RoomId room_id = 0;
     OrbisNpMatching2RoomMemberId my_member_id = 0;
     bool is_room_owner = false;
+    // Ghost-room detection: when we joined someone else's room, and whether that room has
+    // already been reported as dead (see CheckGhostRooms).
+    std::chrono::steady_clock::time_point room_joined_at{};
+    bool room_ghost_handled = false;
     u32 max_slot = 5;
     OrbisNpMatching2Flags flag_attr = 0;
 

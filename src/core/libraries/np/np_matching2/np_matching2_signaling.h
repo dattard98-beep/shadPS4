@@ -12,6 +12,12 @@ struct ContextObject;
 struct CallbackPayload;
 
 void StartMatching2SignalingRuntime();
+
+// Ghost rooms: rooms whose host never became reachable after we joined (usually a session
+// left behind by a crashed emulator). They are reported as dead to the game and hidden from
+// searches for a while.
+bool IsGhostRoom(OrbisNpMatching2RoomId room_id);
+void CheckGhostRooms();
 void StopMatching2SignalingRuntime();
 
 bool SendMatching2StunPing(const ContextObject& ctx);
