@@ -9,6 +9,7 @@
 #include <condition_variable>
 #include <cstring>
 #include <mutex>
+#include <set>
 #include <string>
 #include <thread>
 #include <vector>
@@ -862,6 +863,51 @@ void ProcessPendingActivations() {
     }
 }
 
+// Logs (once per peer) handshakes from players we have no connection entry for, which is how a
+// failed hole punch shows up when the peer's packets arrive but cannot be matched.
+void LogUnknownHandshakePeer(const std::string& from_id, u32 from_addr, u16 from_port, u8 kind) {
+    static std::mutex mutex;
+    static std::set<std::string> logged;
+    std::lock_guard lock(mutex);
+    if (!logged.insert(from_id).second) {
+        return;
+    }
+    LOG_INFO(Lib_NpSignaling,
+             "Signaling: handshake kind={} from unknown peer '{}' at {:#x}:{} ignored", kind,
+             from_id, from_addr, Net::sceNetNtohs(from_port));
+}
+
+// Port prediction for routers that hand out public ports in sequence: while nothing has been
+// heard from the peer, also send an offer to ports next to the reported one (+1, -1, +2, -2 ...
+// up to 8 away). If one gets through, the peer answers and its real endpoint is learned.
+void SendPredictedPortProbe(s32 transport_id) {
+    NpSignaling::SignalingMutexGuard lock;
+    auto* transport = GetTransportLocked(transport_id);
+    if (!transport || transport->last_peer_rx_us != 0 ||
+        transport->state == NpSignaling::ConnState::Established || transport->addr == 0 ||
+        transport->port == 0) {
+        return;
+    }
+    const u32 round = transport->punch_round++;
+    constexpr u32 kDirectRounds = 2; // give the reported port about a second first
+    if (round < kDirectRounds) {
+        return;
+    }
+    if (round == kDirectRounds) {
+        LOG_INFO(Lib_NpSignaling, "Signaling: no reply from {:#x}:{} yet; also probing nearby ports",
+                 transport->addr, Net::sceNetNtohs(transport->port));
+    }
+    const u32 k = (round - kDirectRounds) % 16;
+    const s32 offset = static_cast<s32>(k / 2 + 1) * ((k % 2 == 0) ? 1 : -1);
+    const s32 probe = static_cast<s32>(Net::sceNetNtohs(transport->port)) + offset;
+    if (probe < 1024 || probe > 65535) {
+        return;
+    }
+    const auto pkt = MakeHandshakeLocked(*transport, NpSignaling::HandshakeKind::Offer);
+    NpSignaling::Transport::SignalingSendTo(&pkt, sizeof(pkt), transport->addr,
+                                            Net::sceNetHtons(static_cast<u16>(probe)));
+}
+
 void HandleHandshakePacket(u32 from_addr, u16 from_port,
                            const NpSignaling::SignalingHandshake& pkt) {
     const std::string from_id = PacketOnlineIdString(pkt.online_id_from);
@@ -870,6 +916,7 @@ void HandleHandshakePacket(u32 from_addr, u16 from_port,
     s32 establish_transport = 0;
     NpSignaling::SignalingHandshake reply{};
     bool send_reply = false;
+    bool send_own_check = false;
     s32 reply_transport = 0;
 
     {
@@ -877,10 +924,22 @@ void HandleHandshakePacket(u32 from_addr, u16 from_port,
 
         const s32 transport_id = FindTransportByOnlineIdLocked(from_id);
         if (transport_id != 0) {
-            NpHandler::GetInstance()
-                .GetSignalingState()
-                .peer_transports[transport_id]
-                .last_peer_rx_us = NpSignaling::NowUs();
+            auto& t = NpHandler::GetInstance().GetSignalingState().peer_transports[transport_id];
+            t.last_peer_rx_us = NpSignaling::NowUs();
+            // NAT traversal: always answer the address the peer's packets really come from. A
+            // strict router can use a different public port toward us than the one the server
+            // saw, and replies sent to the server-reported port never arrive.
+            if (from_addr != 0 && from_port != 0 && (t.addr != from_addr || t.port != from_port)) {
+                LOG_INFO(Lib_NpSignaling,
+                         "Signaling: peer '{}' reached us from {:#x}:{} (was {:#x}:{}); using "
+                         "that endpoint",
+                         from_id, from_addr, Net::sceNetNtohs(from_port), t.addr,
+                         Net::sceNetNtohs(t.port));
+                t.addr = from_addr;
+                t.port = from_port;
+            }
+        } else {
+            LogUnknownHandshakePeer(from_id, from_addr, from_port, pkt.kind);
         }
 
         if (kind == NpSignaling::HandshakeKind::Offer) {
@@ -889,7 +948,7 @@ void HandleHandshakePacket(u32 from_addr, u16 from_port,
             }
             auto& transport =
                 NpHandler::GetInstance().GetSignalingState().peer_transports[transport_id];
-            transport.addr = pkt.mapped_addr != 0 ? pkt.mapped_addr : from_addr;
+            transport.addr = from_addr;
             transport.port = from_port;
             transport.peer_activated = true;
             if (transport.state != NpSignaling::ConnState::Established) {
@@ -904,7 +963,7 @@ void HandleHandshakePacket(u32 from_addr, u16 from_port,
             auto& transport =
                 NpHandler::GetInstance().GetSignalingState().peer_transports[transport_id];
             transport.peer_activated = true;
-            transport.addr = pkt.mapped_addr != 0 ? pkt.mapped_addr : from_addr;
+            transport.addr = from_addr;
             transport.port = from_port;
             if (transport.state == NpSignaling::ConnState::SendingOffer ||
                 transport.state == NpSignaling::ConnState::WaitAccept ||
@@ -923,9 +982,13 @@ void HandleHandshakePacket(u32 from_addr, u16 from_port,
             reply.nonce = pkt.nonce;
             send_reply = true;
             reply_transport = transport_id;
-            if (transport.state == NpSignaling::ConnState::SendingAccept ||
-                transport.state == NpSignaling::ConnState::WaitOffer) {
-                SetTransportStateLocked(transport, NpSignaling::ConnState::ConnCheck);
+            if (transport.state != NpSignaling::ConnState::Established) {
+                // The peer can reach us; confirm our direction right away instead of waiting
+                // for our own handshake to catch up, so both sides establish together.
+                if (transport.state != NpSignaling::ConnState::ConnCheck) {
+                    SetTransportStateLocked(transport, NpSignaling::ConnState::ConnCheck);
+                }
+                send_own_check = true;
             }
         } else if (kind == NpSignaling::HandshakeKind::CheckAck) {
             const s64 rtt_us = NpSignaling::NowUs() - static_cast<s64>(pkt.nonce);
@@ -950,6 +1013,11 @@ void HandleHandshakePacket(u32 from_addr, u16 from_port,
         auto* transport = GetTransportLocked(reply_transport);
         if (transport) {
             SendHandshakeLocked(*transport, reply);
+            if (send_own_check) {
+                auto check = MakeHandshakeLocked(*transport, NpSignaling::HandshakeKind::Check);
+                check.nonce = static_cast<u64>(NpSignaling::NowUs());
+                SendHandshakeLocked(*transport, check);
+            }
         }
     }
     if (establish_transport != 0) {
@@ -1254,6 +1322,7 @@ void StepPendingConnections() {
 
     for (const s32 transport_id : resend) {
         StartTransportHandshakeInitiator(transport_id);
+        SendPredictedPortProbe(transport_id);
     }
     for (const s32 transport_id : timeout) {
         CloseTransportAndDispatchDead(transport_id, ORBIS_NP_SIGNALING_ERROR_TIMEOUT,

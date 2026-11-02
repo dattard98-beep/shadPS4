@@ -159,6 +159,10 @@ struct PeerTransport {
     s64 last_echo_ping_us = 0;
     s64 last_peer_rx_us = 0;
     s64 last_handshake_send_us = 0;
+
+    // Hole punching: how many resend rounds have run without hearing from the peer. Used to
+    // start probing ports next to the reported one for routers that allocate them in sequence.
+    u32 punch_round = 0;
 };
 
 struct ConnectionInfo {
