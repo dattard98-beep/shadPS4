@@ -28,6 +28,11 @@ public:
 
     bool IsAvailable() const;
 
+    // True once the router accepted a UDP port mapping, so other players can reach us.
+    bool IsPortMapped() const {
+        return m_port_mapped.load();
+    }
+
     // External IP in network byte order as reported by the IGD. 0 if not yet known.
     u32 GetExternalIp() const;
 
@@ -61,6 +66,7 @@ private:
     std::atomic<u32> m_external_ip_nbo{0};
     std::atomic<u16> m_external_port{0};
     std::atomic<u16> m_mapped_port{0}; // forwarded by MapPortAsync, removed on exit
+    std::atomic<bool> m_port_mapped{false};
     char m_external_ip_str[16]{};
 
     char m_lan_addr[64]{};

@@ -14,6 +14,7 @@
 #include <thread>
 #include <vector>
 
+#include <fmt/format.h>
 #include "common/logging/log.h"
 #include "common/singleton.h"
 #include "core/libraries/net/net.h"
@@ -46,6 +47,24 @@ std::string PacketOnlineIdString(const u8* online_id);
 
 std::string OnlineIdString(const OrbisNpOnlineId& online_id) {
     return NpSignaling::OnlineIdToString(online_id);
+}
+
+std::string FormatIpv4(u32 addr_nbo) {
+    const auto* b = reinterpret_cast<const u8*>(&addr_nbo);
+    return fmt::format("{}.{}.{}.{}", b[0], b[1], b[2], b[3]);
+}
+
+// One line per connection attempt, so a single log shows what happened with each opponent.
+void LogTransportSummaryLocked(const NpSignaling::PeerTransport& t, const char* result) {
+    const s64 now = NpSignaling::NowUs();
+    const double secs =
+        t.first_send_us != 0 ? static_cast<double>(now - t.first_send_us) / 1'000'000.0 : 0.0;
+    LOG_INFO(Lib_NpSignaling,
+             "Connection summary: peer '{}' {} after {:.1f}s | sent {} packets, received {} | "
+             "server gave {}:{}, last used {}:{} | we are {}",
+             OnlineIdString(t.online_id), result, secs, t.tx_packets, t.rx_packets,
+             FormatIpv4(t.first_addr), Net::sceNetNtohs(t.first_port), FormatIpv4(t.addr),
+             Net::sceNetNtohs(t.port), NpMatching2::IsLocalP2PReachable() ? "OPEN" : "BLOCKED");
 }
 
 bool ShouldConnectToPeer(const NpMatching2::RoomCache& room,
@@ -490,6 +509,12 @@ void SendHandshakeLocked(NpSignaling::PeerTransport& transport,
         return;
     }
     transport.last_handshake_send_us = NpSignaling::NowUs();
+    if (transport.first_send_us == 0) {
+        transport.first_send_us = transport.last_handshake_send_us;
+        transport.first_addr = transport.addr;
+        transport.first_port = transport.port;
+    }
+    ++transport.tx_packets;
     const int rc =
         NpSignaling::Transport::SignalingSendTo(&pkt, sizeof(pkt), transport.addr, transport.port);
     LOG_DEBUG(
@@ -682,6 +707,9 @@ void CloseTransportAndDispatchDead(s32 transport_id, s32 sig_error_code, s32 mat
         if (!transport || transport->state == NpSignaling::ConnState::Inactive) {
             return;
         }
+        LogTransportSummaryLocked(*transport, transport->transport_established_fired
+                                                  ? "disconnected"
+                                                  : "FAILED (never connected)");
         SetTransportStateLocked(*transport, NpSignaling::ConnState::Inactive);
         for (auto& [conn_id, ci] : NpHandler::GetInstance().GetSignalingState().connections) {
             if (ci.transport_id != transport_id || ci.dead_fired) {
@@ -733,6 +761,7 @@ void EstablishConnection(s32 transport_id, bool peer_activated_hint) {
             transport->transport_established_fired = true;
             transport->last_peer_rx_us = NpSignaling::NowUs();
             first_establish = true;
+            LogTransportSummaryLocked(*transport, "CONNECTED");
 
             if (transport->addr != 0 && transport->port != 0) {
                 established_pkt =
@@ -905,6 +934,7 @@ void SendPredictedPortProbe(s32 transport_id) {
         return;
     }
     const auto pkt = MakeHandshakeLocked(*transport, NpSignaling::HandshakeKind::Offer);
+    ++transport->tx_packets;
     NpSignaling::Transport::SignalingSendTo(&pkt, sizeof(pkt), transport->addr,
                                             Net::sceNetHtons(static_cast<u16>(probe)));
 }
@@ -927,6 +957,7 @@ void HandleHandshakePacket(u32 from_addr, u16 from_port,
         if (transport_id != 0) {
             auto& t = NpHandler::GetInstance().GetSignalingState().peer_transports[transport_id];
             t.last_peer_rx_us = NpSignaling::NowUs();
+            ++t.rx_packets;
             // NAT traversal: always answer the address the peer's packets really come from. A
             // strict router can use a different public port toward us than the one the server
             // saw, and replies sent to the server-reported port never arrive.

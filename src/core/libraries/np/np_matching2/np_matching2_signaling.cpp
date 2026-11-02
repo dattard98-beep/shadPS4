@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <cstring>
 #include <map>
@@ -9,10 +10,13 @@
 #include <mutex>
 #include <string>
 
+#include "common/elf_info.h"
 #include "common/logging/log.h"
 #include "common/singleton.h"
+#include "core/emulator_settings.h"
 #include "core/libraries/net/net.h"
 #include "core/libraries/net/net_p2p.h"
+#include "core/libraries/net/net_upnp.h"
 #include "core/libraries/net/net_util.h"
 #include "core/libraries/network/netctl.h"
 #include "core/libraries/np/np_error.h"
@@ -100,38 +104,6 @@ void QueueMatching2SignalingEvent(ContextObject& ctx, OrbisNpMatching2RoomId roo
     ScheduleEvent(std::move(ev));
 }
 
-void QueueMatching2DeadForRoomPeers(ContextObject& ctx, OrbisNpMatching2RoomId room_id,
-                                    s32 error_code) {
-    std::vector<OrbisNpMatching2RoomMemberId> dead_members;
-    {
-        auto cache = NpHandler::GetInstance().LockMatching2Cache(ctx.ctx_id);
-        const auto room_it = cache->rooms.find(room_id);
-        if (room_it == cache->rooms.end()) {
-            return;
-        }
-
-        for (const auto& [member_id, member] : room_it->second.members) {
-            if (member_id == 0 || member_id == ctx.my_member_id) {
-                continue;
-            }
-
-            const auto peer_it = cache->peers.find(member_id);
-            if (peer_it != cache->peers.end()) {
-                peer_it->second.status = kMatching2ConnInactive;
-            }
-            dead_members.push_back(member_id);
-        }
-    }
-
-    for (const auto member_id : dead_members) {
-        QueueMatching2SignalingEvent(ctx, room_id, member_id,
-                                     ORBIS_NP_MATCHING2_SIGNALING_EVENT_DEAD, error_code);
-        LOG_INFO(Lib_NpMatching2, "Matching2 signaling dead: ctx={} room={} member={} reason={:#x}",
-                 ctx.ctx_id, room_id, member_id, static_cast<u32>(error_code));
-    }
-    SignalingHandler::StopMatching2(ctx, room_id, error_code);
-}
-
 namespace {
 
 // How long a joined room may go without a direct connection to any other member before it is
@@ -149,6 +121,51 @@ void MarkGhostRoom(OrbisNpMatching2RoomId room_id) {
 
 } // namespace
 
+void QueueMatching2DeadForRoomPeers(ContextObject& ctx, OrbisNpMatching2RoomId room_id,
+                                    s32 error_code) {
+    std::vector<OrbisNpMatching2RoomMemberId> dead_members;
+    bool reached_anyone = false;
+    {
+        auto cache = NpHandler::GetInstance().LockMatching2Cache(ctx.ctx_id);
+        const auto room_it = cache->rooms.find(room_id);
+        if (room_it == cache->rooms.end()) {
+            return;
+        }
+
+        for (const auto& [member_id, member] : room_it->second.members) {
+            if (member_id == 0 || member_id == ctx.my_member_id) {
+                continue;
+            }
+
+            const auto peer_it = cache->peers.find(member_id);
+            if (peer_it != cache->peers.end()) {
+                reached_anyone = reached_anyone || peer_it->second.sent_established;
+                peer_it->second.status = kMatching2ConnInactive;
+            }
+            dead_members.push_back(member_id);
+        }
+    }
+
+    // A room whose other players we never reached is no use to us: keep it out of our own
+    // searches so the game does not join the same unreachable player again.
+    if (!dead_members.empty() && !reached_anyone && !IsGhostRoom(room_id)) {
+        LOG_INFO(Lib_NpMatching2,
+                 "room {}: never connected to its other player; hiding it from our searches for "
+                 "{} min",
+                 room_id,
+                 std::chrono::duration_cast<std::chrono::minutes>(kGhostRoomHideTime).count());
+        MarkGhostRoom(room_id);
+    }
+
+    for (const auto member_id : dead_members) {
+        QueueMatching2SignalingEvent(ctx, room_id, member_id,
+                                     ORBIS_NP_MATCHING2_SIGNALING_EVENT_DEAD, error_code);
+        LOG_INFO(Lib_NpMatching2, "Matching2 signaling dead: ctx={} room={} member={} reason={:#x}",
+                 ctx.ctx_id, room_id, member_id, static_cast<u32>(error_code));
+    }
+    SignalingHandler::StopMatching2(ctx, room_id, error_code);
+}
+
 bool IsGhostRoom(OrbisNpMatching2RoomId room_id) {
     std::lock_guard lock(g_ghost_mutex);
     const auto now = std::chrono::steady_clock::now();
@@ -156,6 +173,25 @@ bool IsGhostRoom(OrbisNpMatching2RoomId room_id) {
         it = it->second <= now ? g_ghost_rooms.erase(it) : std::next(it);
     }
     return g_ghost_rooms.find(room_id) != g_ghost_rooms.end();
+}
+
+bool OpenHostMatchingActive() {
+    const auto serial = Common::ElfInfo::Instance().GameSerial();
+    return serial == "CUSA02046" || serial == "CUSA02058";
+}
+
+bool IsLocalP2PReachable() {
+    const bool forwarded = EmulatorSettings.IsP2PPortForwarded();
+    const bool upnp = Net::UPnPClient::Instance().IsPortMapped();
+    const bool open = forwarded || upnp;
+    static std::atomic<int> last_logged{-1};
+    if (last_logged.exchange(open ? 1 : 0) != (open ? 1 : 0)) {
+        LOG_INFO(Lib_NpMatching2, "Reachability: {} ({})", open ? "OPEN" : "BLOCKED",
+                 forwarded ? "p2p_port_forwarded is set"
+                 : upnp    ? "UPnP forwarded the P2P port"
+                           : "no UPnP on the router and p2p_port_forwarded is off");
+    }
+    return open;
 }
 
 void CheckGhostRooms() {

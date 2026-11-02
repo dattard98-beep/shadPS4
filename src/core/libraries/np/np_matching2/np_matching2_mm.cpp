@@ -282,6 +282,7 @@ void DispatchRequestComplete(const PendingRequest& pr, ShadNet::ErrorType error,
                    pr.req_event == ORBIS_NP_MATCHING2_REQUEST_EVENT_SEARCH_ROOM_A) {
             shadnet::SearchRoomReply reply;
             if (reply.ParseFromString(proto)) {
+                ProcessOpenHostSearchReply(reply);
                 request_data = pr.a_variant ? BuildSearchRoomPayloadA(*ctx, payload, reply)
                                             : BuildSearchRoomPayload(*ctx, payload, reply);
             }
@@ -796,6 +797,68 @@ void HandleRoomMessage(const ShadNet::NotifyRoomMessage& n) {
     ScheduleEvent(std::move(ev));
 }
 
+// Open-host matchmaking: tag our room with whether other players can reach us directly.
+void AppendOpenHostAttr(shadnet::CreateRoomRequest& req, const OrbisNpMatching2IntAttr* attrs,
+                        u64 count) {
+    if (!OpenHostMatchingActive()) {
+        return;
+    }
+    for (u64 i = 0; i < count; ++i) {
+        if (attrs && attrs[i].id == kOpenHostAttrId) {
+            return; // the game uses this attribute itself
+        }
+    }
+    const bool open = IsLocalP2PReachable();
+    auto* attr = req.add_external_search_int_attrs();
+    attr->set_attr_id(kOpenHostAttrId);
+    attr->set_attr_value(open ? kOpenHostValueOpen : kOpenHostValueBlocked);
+    LOG_INFO(Lib_NpMatching2, "Open-host matching: hosting as {}",
+             open ? "OPEN (anyone can join)" : "BLOCKED (only open players will see this room)");
+}
+
+// Open-host matchmaking: a blocked player only asks for rooms whose host is open.
+void AppendOpenHostFilter(shadnet::SearchRoomRequest& req,
+                          const OrbisNpMatching2SearchRoomRequest& request) {
+    if (!OpenHostMatchingActive() || IsLocalP2PReachable()) {
+        return;
+    }
+    for (u64 i = 0; i < request.intFilters; ++i) {
+        if (request.intFilter[i].attr.id == kOpenHostAttrId) {
+            return;
+        }
+    }
+    auto* f = req.add_int_filters();
+    f->set_op(1); // equal
+    f->set_attr_id(kOpenHostAttrId);
+    f->set_attr_value(kOpenHostValueOpen);
+    LOG_INFO(Lib_NpMatching2,
+             "Open-host matching: we are BLOCKED, only looking for rooms hosted by open players");
+}
+
+// Logs each found room's host status and removes the tag so the game only sees its own data.
+void ProcessOpenHostSearchReply(shadnet::SearchRoomReply& reply) {
+    if (!OpenHostMatchingActive()) {
+        return;
+    }
+    for (auto& room : *reply.mutable_rooms()) {
+        u32 value = 0;
+        auto* attrs = room.mutable_external_search_int_attrs();
+        for (auto it = attrs->begin(); it != attrs->end();) {
+            if (it->attr_id() == kOpenHostAttrId) {
+                value = it->attr_value();
+                it = attrs->erase(it);
+            } else {
+                ++it;
+            }
+        }
+        LOG_INFO(Lib_NpMatching2, "Search: room {} host '{}' is {}", room.room_id(),
+                 room.owner_npid(),
+                 value == kOpenHostValueOpen      ? "OPEN"
+                 : value == kOpenHostValueBlocked ? "BLOCKED"
+                                                  : "unknown (older build)");
+    }
+}
+
 } // namespace
 
 void OnMatchingReply(ShadNet::CommandType cmd, u64 pkt_id, ShadNet::ErrorType error,
@@ -1040,6 +1103,7 @@ s32 MmCreateJoinRoom(OrbisNpMatching2ContextId ctx_id, OrbisNpMatching2RequestId
         LogIntAttr("  createExternalSearchInt", i, request.externalSearchIntAttr[i]);
         AppendIntAttr(req.add_external_search_int_attrs(), request.externalSearchIntAttr[i]);
     }
+    AppendOpenHostAttr(req, request.externalSearchIntAttr, request.externalSearchIntAttrs);
     for (u64 i = 0; i < request.externalSearchBinAttrs; ++i) {
         LogBinAttr("  createExternalSearchBin", i, request.externalSearchBinAttr[i]);
         AppendCreateRoomBinAttrById(req, request.externalSearchBinAttr[i], "externalSearchBinAttr");
@@ -1104,6 +1168,7 @@ s32 MmCreateJoinRoomA(OrbisNpMatching2ContextId ctx_id, OrbisNpMatching2RequestI
         LogIntAttr("  createExternalSearchIntA", i, request.externalSearchIntAttr[i]);
         AppendIntAttr(req.add_external_search_int_attrs(), request.externalSearchIntAttr[i]);
     }
+    AppendOpenHostAttr(req, request.externalSearchIntAttr, request.externalSearchIntAttrs);
     for (u64 i = 0; i < request.externalSearchBinAttrs; ++i) {
         LogBinAttr("  createExternalSearchBinA", i, request.externalSearchBinAttr[i]);
         AppendCreateRoomBinAttrById(req, request.externalSearchBinAttr[i],
@@ -1226,6 +1291,10 @@ s32 MmSearchRoom(OrbisNpMatching2ContextId ctx_id, OrbisNpMatching2RequestId req
     for (u64 i = 0; i < request.attrs; ++i) {
         req.add_attr_ids(request.attr[i]);
     }
+    if (OpenHostMatchingActive() && request.attrs > 0) {
+        req.add_attr_ids(kOpenHostAttrId); // so the log can show each host's status
+    }
+    AppendOpenHostFilter(req, request);
     return MmSubmitRequest(ctx_id, req_id,
                            a_variant ? ORBIS_NP_MATCHING2_REQUEST_EVENT_SEARCH_ROOM_A
                                      : ORBIS_NP_MATCHING2_REQUEST_EVENT_SEARCH_ROOM,

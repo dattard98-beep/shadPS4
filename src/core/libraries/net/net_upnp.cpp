@@ -133,6 +133,7 @@ void UPnPClient::AddMapping(u16 port) {
 
     if (ret == UPNPCOMMAND_SUCCESS) {
         m_external_port.store(port);
+        m_port_mapped.store(true);
         LOG_INFO(Lib_Net, "UPNP: mapped UDP port {}", port);
     } else {
         // Store the requested port as best-guess even on failure so callers still get a value.

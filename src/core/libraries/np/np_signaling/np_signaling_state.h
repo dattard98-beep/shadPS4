@@ -163,6 +163,13 @@ struct PeerTransport {
     // Hole punching: how many resend rounds have run without hearing from the peer. Used to
     // start probing ports next to the reported one for routers that allocate them in sequence.
     u32 punch_round = 0;
+
+    // Per-attempt numbers for the summary line logged when the connection is made or given up.
+    u32 tx_packets = 0;
+    u32 rx_packets = 0;
+    u32 first_addr = 0;
+    u16 first_port = 0;
+    s64 first_send_us = 0;
 };
 
 struct ConnectionInfo {
