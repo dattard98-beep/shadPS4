@@ -571,8 +571,8 @@ s32 PS4_SYSV_ABI sceNpMatching2SignalingGetConnectionStatus(OrbisNpMatching2Cont
                                                             OrbisNpMatching2RoomMemberId memberId,
                                                             s32* connStatus, void* peerAddr,
                                                             u16* peerPort) {
-    LOG_INFO(Lib_NpMatching2, "called, ctxId = {}, roomId = {}, memberId = {}", ctxId, roomId,
-             memberId);
+    LOG_DEBUG(Lib_NpMatching2, "called, ctxId = {}, roomId = {}, memberId = {}", ctxId, roomId,
+              memberId);
 
     if (!IsInitialized()) {
         LOG_ERROR(Lib_NpMatching2, "not initialized");
@@ -597,7 +597,8 @@ s32 PS4_SYSV_ABI sceNpMatching2SignalingGetConnectionStatus(OrbisNpMatching2Cont
         if (connStatus) {
             *connStatus = kInactive;
         }
-        LOG_INFO(Lib_NpMatching2, "member={} is not in room={}, status=inactive", memberId, roomId);
+        LOG_DEBUG(Lib_NpMatching2, "member={} is not in room={}, status=inactive", memberId,
+                  roomId);
         return ORBIS_OK;
     }
 
@@ -626,8 +627,8 @@ s32 PS4_SYSV_ABI sceNpMatching2SignalingGetConnectionStatus(OrbisNpMatching2Cont
         *peerPort = peer_it->second.port;
     }
 
-    LOG_INFO(Lib_NpMatching2, "member={} is in room={}, status={} addr={:#x}:{}", memberId, roomId,
-             status, peer_it->second.addr, Libraries::Net::sceNetNtohs(peer_it->second.port));
+    LOG_DEBUG(Lib_NpMatching2, "member={} is in room={}, status={} addr={:#x}:{}", memberId, roomId,
+              status, peer_it->second.addr, Libraries::Net::sceNetNtohs(peer_it->second.port));
     return ORBIS_OK;
 }
 
@@ -1121,8 +1122,8 @@ int PS4_SYSV_ABI sceNpMatching2SignalingGetConnectionInfoA(OrbisNpMatching2Conte
                                                            OrbisNpMatching2RoomId roomId,
                                                            OrbisNpMatching2RoomMemberId memberId,
                                                            u32 infoType, void* connInfo) {
-    LOG_INFO(Lib_NpMatching2, "called, ctxId = {}, roomId = {}, memberId = {}", ctxId, roomId,
-             memberId);
+    LOG_DEBUG(Lib_NpMatching2, "called, ctxId = {}, roomId = {}, memberId = {}", ctxId, roomId,
+              memberId);
     if (!IsInitialized()) {
         LOG_ERROR(Lib_NpMatching2, "not initialized");
         return ORBIS_NP_MATCHING2_ERROR_NOT_INITIALIZED;
@@ -1140,8 +1141,8 @@ int PS4_SYSV_ABI sceNpMatching2SignalingGetConnectionInfo(OrbisNpMatching2Contex
                                                           OrbisNpMatching2RoomId roomId,
                                                           OrbisNpMatching2RoomMemberId memberId,
                                                           u32 infoType, void* connInfo) {
-    LOG_INFO(Lib_NpMatching2, "called, ctxId = {}, roomId = {}, memberId = {}", ctxId, roomId,
-             memberId);
+    LOG_DEBUG(Lib_NpMatching2, "called, ctxId = {}, roomId = {}, memberId = {}", ctxId, roomId,
+              memberId);
     if (!IsInitialized()) {
         LOG_ERROR(Lib_NpMatching2, "not initialized");
         return ORBIS_NP_MATCHING2_ERROR_NOT_INITIALIZED;
@@ -1156,7 +1157,7 @@ int PS4_SYSV_ABI sceNpMatching2SignalingGetConnectionInfo(OrbisNpMatching2Contex
 }
 
 int PS4_SYSV_ABI sceNpMatching2SignalingGetLocalNetInfo(void* info) {
-    LOG_INFO(Lib_NpMatching2, "called");
+    LOG_DEBUG(Lib_NpMatching2, "called");
     if (!IsInitialized()) {
         LOG_ERROR(Lib_NpMatching2, "not initialized");
         return ORBIS_NP_MATCHING2_ERROR_NOT_INITIALIZED;

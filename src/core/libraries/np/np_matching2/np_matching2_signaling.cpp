@@ -408,9 +408,9 @@ s32 FillMatching2ConnectionInfo(const ContextObject& ctx, OrbisNpMatching2RoomId
         }
     }
 
-    LOG_INFO(Lib_NpMatching2, "connection info{}: ctx={} room={} member={} type={} rtt={}",
-             a_variant ? "A" : "", ctx.ctx_id, roomId, memberId, infoType,
-             peer ? peer->ping_us : 0);
+    LOG_DEBUG(Lib_NpMatching2, "connection info{}: ctx={} room={} member={} type={} rtt={}",
+              a_variant ? "A" : "", ctx.ctx_id, roomId, memberId, infoType,
+              peer ? peer->ping_us : 0);
     return ORBIS_OK;
 }
 
@@ -444,8 +444,8 @@ s32 FillMatching2LocalNetInfo(void* info) {
     }
     out->_pad_14 = 0;
 
-    LOG_INFO(Lib_NpMatching2, "localAddr={:#x} mappedAddr={:#x} natStatus={}", out->localAddr,
-             out->mappedAddr, out->natStatus);
+    LOG_DEBUG(Lib_NpMatching2, "localAddr={:#x} mappedAddr={:#x} natStatus={}", out->localAddr,
+              out->mappedAddr, out->natStatus);
     return ORBIS_OK;
 }
 
