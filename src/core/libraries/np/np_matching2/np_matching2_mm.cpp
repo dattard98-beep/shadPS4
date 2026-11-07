@@ -824,6 +824,11 @@ void AppendOpenHostFilter(shadnet::SearchRoomRequest& req,
     if (!OpenHostMatchingActive() || IsLocalP2PReachable()) {
         return;
     }
+    if (Net::P2PRelayConfigured()) {
+        LOG_INFO(Lib_NpMatching2, "Open-host matching: we are BLOCKED but a relay is set, so "
+                                  "all rooms are shown");
+        return;
+    }
     for (u64 i = 0; i < request.intFilters; ++i) {
         if (request.intFilter[i].attr.id == kOpenHostAttrId) {
             return;

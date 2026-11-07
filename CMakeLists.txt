@@ -880,6 +880,8 @@ set(NET_CORE  src/core/net/guest_net.cpp
               src/core/net/p2p_crypto.h
               src/core/net/p2p_tcp.cpp
               src/core/net/p2p_tcp.h
+              src/core/net/p2p_relay.cpp
+              src/core/net/p2p_relay.h
               src/core/net/p2p_transport.cpp
               src/core/net/p2p_transport.h
 )

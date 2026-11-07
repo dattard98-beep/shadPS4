@@ -203,6 +203,8 @@ public:
 
     Error SendSignaling(std::span<const u8> data, const Endpoint& to);
     bool RecvSignaling(size_t channel, std::vector<u8>* data, Endpoint* from);
+    // Sends exactly these bytes, bypassing the codec and the relay (relay keepalives).
+    Error SendRaw(std::span<const u8> packet, const Endpoint& to);
 
     void SetOutgoingLossForTesting(double probability);
 

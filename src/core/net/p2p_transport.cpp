@@ -5,6 +5,7 @@
 #include <cstring>
 #include <tuple>
 
+#include "core/net/p2p_relay.h"
 #include "core/net/p2p_transport.h"
 
 #ifndef _WIN32
@@ -222,8 +223,21 @@ void Transport::ThreadMain() {
             if (r.error != Error::Ok) {
                 break;
             }
-            HandlePacket({receive_buffer_.data(), static_cast<size_t>(r.value)},
-                         Endpoint::FromSockaddr(reinterpret_cast<sockaddr*>(&from), from_len), now);
+            const std::span<const u8> packet{receive_buffer_.data(), static_cast<size_t>(r.value)};
+            const auto sender =
+                Endpoint::FromSockaddr(reinterpret_cast<sockaddr*>(&from), from_len);
+            std::vector<u8> relayed;
+            Endpoint relayed_from;
+            switch (Relay::HandleInbound(packet, sender, &relayed, &relayed_from)) {
+            case Relay::Inbound::NotRelay:
+                HandlePacket(packet, sender, now);
+                break;
+            case Relay::Inbound::Data:
+                HandlePacket(relayed, relayed_from, now);
+                break;
+            case Relay::Inbound::Consumed:
+                break;
+            }
         }
         RunTimers(now);
     }
@@ -270,9 +284,20 @@ Error Transport::SendPacket(std::span<const u8> packet, const Endpoint& to) {
             return Error::Ok;
         }
     }
+    std::vector<u8> wrapped;
+    if (const auto relay = Relay::Route(to, packet, &wrapped)) {
+        return Host::SendTo(socket_, wrapped.data(), wrapped.size(), 0, relay->Sockaddr(),
+                            relay->Length())
+            .error;
+    }
     const auto r =
         Host::SendTo(socket_, packet.data(), packet.size(), 0, to.Sockaddr(), to.Length());
     return r.error;
+}
+
+Error Transport::SendRaw(std::span<const u8> packet, const Endpoint& to) {
+    std::scoped_lock lock{mutex_};
+    return Host::SendTo(socket_, packet.data(), packet.size(), 0, to.Sockaddr(), to.Length()).error;
 }
 
 u32 Transport::NewIss() {

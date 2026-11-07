@@ -243,6 +243,9 @@ struct NetworkSettings {
     // Set when the user forwarded p2p_port on their router by hand. Such players can host
     // matches for players whose routers block incoming traffic.
     Setting<bool> p2p_port_forwarded{false};
+    // "host:port" of a Godzilla relay server, used when two players can't connect directly.
+    // Empty disables the relay.
+    Setting<std::string> relay_server{""};
     Setting<bool> disable_https{false};
     Setting<bool> enable_device_discovery{false};
 
@@ -258,6 +261,7 @@ struct NetworkSettings {
             make_override<NetworkSettings>("p2p_port", &NetworkSettings::p2p_port),
             make_override<NetworkSettings>("p2p_port_forwarded",
                                            &NetworkSettings::p2p_port_forwarded),
+            make_override<NetworkSettings>("relay_server", &NetworkSettings::relay_server),
             make_override<NetworkSettings>("disable_https", &NetworkSettings::disable_https),
             make_override<NetworkSettings>("enable_device_discovery",
                                            &NetworkSettings::enable_device_discovery)};
@@ -266,7 +270,8 @@ struct NetworkSettings {
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(NetworkSettings, connected_to_network, shad_net_enabled,
                                    shadnet_server, shadnet_webapi_server, enable_upnp, p2p_port,
-                                   p2p_port_forwarded, disable_https, enable_device_discovery)
+                                   p2p_port_forwarded, relay_server, disable_https,
+                                   enable_device_discovery)
 
 // -------------------------------
 // Log settings
@@ -730,6 +735,7 @@ public:
     SETTING_FORWARD_BOOL(m_network, UPnPEnabled, enable_upnp)
     SETTING_FORWARD(m_network, P2PPort, p2p_port)
     SETTING_FORWARD_BOOL(m_network, P2PPortForwarded, p2p_port_forwarded)
+    SETTING_FORWARD(m_network, RelayServer, relay_server)
     SETTING_FORWARD_BOOL(m_network, ForcedHttpsDisabled, disable_https)
     SETTING_FORWARD_BOOL(m_network, DeviceDiscoveryEnabled, enable_device_discovery)
 

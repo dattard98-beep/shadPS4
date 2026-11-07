@@ -17,7 +17,9 @@
 #include <fmt/format.h>
 #include "common/logging/log.h"
 #include "common/singleton.h"
+#include "core/emulator_settings.h"
 #include "core/libraries/net/net.h"
+#include "core/libraries/net/net_p2p.h"
 #include "core/libraries/net/net_util.h"
 #include "core/libraries/np/np_error.h"
 #include "core/libraries/np/np_handler/np_handler.h"
@@ -54,6 +56,14 @@ std::string FormatIpv4(u32 addr_nbo) {
     return fmt::format("{}.{}.{}.{}", b[0], b[1], b[2], b[3]);
 }
 
+// Both players compute the same relay session id from their two online ids.
+u64 RelaySessionLocked(const NpSignaling::PeerTransport& t) {
+    return Net::P2PRelaySession(OnlineIdString(t.local_online_id), OnlineIdString(t.online_id));
+}
+
+// After this long without a working direct path, both sides move the peer to the relay.
+constexpr s64 kRelayAfterUs = 5'000'000;
+
 // One line per connection attempt, so a single log shows what happened with each opponent.
 void LogTransportSummaryLocked(const NpSignaling::PeerTransport& t, const char* result) {
     const s64 now = NpSignaling::NowUs();
@@ -61,10 +71,11 @@ void LogTransportSummaryLocked(const NpSignaling::PeerTransport& t, const char* 
         t.first_send_us != 0 ? static_cast<double>(now - t.first_send_us) / 1'000'000.0 : 0.0;
     LOG_INFO(Lib_NpSignaling,
              "Connection summary: peer '{}' {} after {:.1f}s | sent {} packets, received {} | "
-             "server gave {}:{}, last used {}:{} | we are {}",
+             "server gave {}:{}, last used {}:{} | we are {} | path {}",
              OnlineIdString(t.online_id), result, secs, t.tx_packets, t.rx_packets,
              FormatIpv4(t.first_addr), Net::sceNetNtohs(t.first_port), FormatIpv4(t.addr),
-             Net::sceNetNtohs(t.port), NpMatching2::IsLocalP2PReachable() ? "OPEN" : "BLOCKED");
+             Net::sceNetNtohs(t.port), NpMatching2::IsLocalP2PReachable() ? "OPEN" : "BLOCKED",
+             Net::P2PRelayIsActive(RelaySessionLocked(t)) ? "RELAY" : "direct");
 }
 
 bool ShouldConnectToPeer(const NpMatching2::RoomCache& room,
@@ -710,6 +721,7 @@ void CloseTransportAndDispatchDead(s32 transport_id, s32 sig_error_code, s32 mat
         LogTransportSummaryLocked(*transport, transport->transport_established_fired
                                                   ? "disconnected"
                                                   : "FAILED (never connected)");
+        Net::P2PRelayForget(RelaySessionLocked(*transport));
         SetTransportStateLocked(*transport, NpSignaling::ConnState::Inactive);
         for (auto& [conn_id, ci] : NpHandler::GetInstance().GetSignalingState().connections) {
             if (ci.transport_id != transport_id || ci.dead_fired) {
@@ -762,6 +774,9 @@ void EstablishConnection(s32 transport_id, bool peer_activated_hint) {
             transport->last_peer_rx_us = NpSignaling::NowUs();
             first_establish = true;
             LogTransportSummaryLocked(*transport, "CONNECTED");
+            if (!Net::P2PRelayIsActive(RelaySessionLocked(*transport))) {
+                Net::P2PRelayForget(RelaySessionLocked(*transport)); // direct path works
+            }
 
             if (transport->addr != 0 && transport->port != 0) {
                 established_pkt =
@@ -914,7 +929,7 @@ void SendPredictedPortProbe(s32 transport_id) {
     auto* transport = GetTransportLocked(transport_id);
     if (!transport || transport->last_peer_rx_us != 0 ||
         transport->state == NpSignaling::ConnState::Established || transport->addr == 0 ||
-        transport->port == 0) {
+        transport->port == 0 || Net::P2PRelayIsActive(RelaySessionLocked(*transport))) {
         return;
     }
     const u32 round = transport->punch_round++;
@@ -1343,6 +1358,21 @@ void StepPendingConnections() {
                 continue;
             }
 
+            if (Net::P2PRelayConfigured() && transport.addr != 0 && transport.port != 0 &&
+                transport.local_online_id.data[0] != '\0') {
+                const u64 session = RelaySessionLocked(transport);
+                Net::P2PRelayRegister(session, transport.addr, transport.port,
+                                      OnlineIdString(transport.online_id));
+                if (transport.first_send_us != 0 &&
+                    now - transport.first_send_us >= kRelayAfterUs) {
+                    Net::P2PRelayActivate(session,
+                                          fmt::format("no direct connection after {} s ({} packets "
+                                                      "sent, {} received)",
+                                                      kRelayAfterUs / 1'000'000,
+                                                      transport.tx_packets, transport.rx_packets));
+                }
+            }
+
             if (transport.last_handshake_send_us == 0 ||
                 now - transport.last_handshake_send_us >=
                     std::chrono::duration_cast<std::chrono::microseconds>(kMatching2StepInterval)
@@ -1367,6 +1397,7 @@ void ThreadMain() {
     auto& state = NpHandler::GetInstance().GetSignalingState();
     auto last_publish = std::chrono::steady_clock::time_point{};
     auto last_ghost_check = std::chrono::steady_clock::time_point{};
+    auto last_relay_update = std::chrono::steady_clock::time_point{};
     while (!state.runtime_stop.load(std::memory_order_relaxed)) {
         if (!NpSignaling::Transport::EnsureTransport()) {
             std::this_thread::sleep_for(std::chrono::milliseconds(50));
@@ -1374,6 +1405,10 @@ void ThreadMain() {
         }
 
         const auto now = std::chrono::steady_clock::now();
+        if (now - last_relay_update >= std::chrono::milliseconds(250)) {
+            last_relay_update = now;
+            Net::P2PRelayUpdate(EmulatorSettings.GetRelayServer());
+        }
         DrainControlPackets();
         DrainSignalingPackets();
         StepPendingConnections();

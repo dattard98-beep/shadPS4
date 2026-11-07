@@ -20,6 +20,7 @@
 #include "core/libraries/net/net_translate.h"
 #include "core/net/guest_net.h"
 #include "core/net/p2p_codec.h"
+#include "core/net/p2p_relay.h"
 
 namespace Libraries::Net {
 
@@ -309,6 +310,74 @@ int P2PMatching2SendTo(const void* data, u32 len, u32 dest_addr, u16 dest_port) 
 
 int P2PMatching2RecvFrom(void* buf, u32 len, u32* from_addr, u16* from_port) {
     return ChannelRecvFrom(Matching2, buf, len, from_addr, from_port);
+}
+
+namespace {
+
+P2P::Endpoint EndpointFromNet(u32 addr, u16 port) {
+    sockaddr_in in{};
+    in.sin_family = AF_INET;
+    in.sin_addr.s_addr = addr;
+    in.sin_port = port;
+    return P2P::Endpoint::FromSockaddr(reinterpret_cast<const sockaddr*>(&in), sizeof(in));
+}
+
+} // namespace
+
+void P2PRelayUpdate(const std::string& server) {
+    static std::once_flag sink_once;
+    std::call_once(sink_once, [] {
+        P2P::Relay::SetLogSink([](P2P::Relay::LogLevel level, const std::string& text) {
+            switch (level) {
+            case P2P::Relay::LogLevel::Info:
+                LOG_INFO(Lib_Net, "{}", text);
+                break;
+            case P2P::Relay::LogLevel::Warning:
+                LOG_WARNING(Lib_Net, "{}", text);
+                break;
+            case P2P::Relay::LogLevel::Error:
+                LOG_ERROR(Lib_Net, "{}", text);
+                break;
+            }
+        });
+    });
+    P2P::Relay::SetServer(server);
+    P2P::Endpoint relay;
+    const auto packets = P2P::Relay::DueControlPackets(&relay);
+    if (packets.empty()) {
+        return;
+    }
+    const auto transport = RunningTransport();
+    if (!transport) {
+        return;
+    }
+    for (const auto& packet : packets) {
+        transport->SendRaw(packet, relay);
+    }
+}
+
+bool P2PRelayConfigured() {
+    return P2P::Relay::Configured();
+}
+
+u64 P2PRelaySession(std::string_view online_id_a, std::string_view online_id_b) {
+    return P2P::Relay::SessionFor(online_id_a, online_id_b);
+}
+
+void P2PRelayRegister(u64 session, u32 addr, u16 port, std::string_view peer_name) {
+    P2P::Relay::RegisterPeer(session, EndpointFromNet(addr, port), peer_name);
+}
+
+void P2PRelayActivate(u64 session, std::string_view reason) {
+    P2P::Relay::Activate(session, reason);
+}
+
+bool P2PRelayIsActive(u64 session) {
+    return P2P::Relay::IsActive(session);
+}
+
+void P2PRelayForget(u64 session) {
+    P2P::Relay::Forget(session);
 }
 
 } // namespace Libraries::Net
