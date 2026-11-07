@@ -1358,7 +1358,8 @@ void StepPendingConnections() {
                 continue;
             }
 
-            if (Net::P2PRelayConfigured() && transport.addr != 0 && transport.port != 0 &&
+            if (NpMatching2::OpenHostMatchingActive() && Net::P2PRelayConfigured() &&
+                transport.addr != 0 && transport.port != 0 &&
                 transport.local_online_id.data[0] != '\0') {
                 const u64 session = RelaySessionLocked(transport);
                 Net::P2PRelayRegister(session, transport.addr, transport.port,

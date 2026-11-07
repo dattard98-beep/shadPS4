@@ -244,8 +244,8 @@ struct NetworkSettings {
     // matches for players whose routers block incoming traffic.
     Setting<bool> p2p_port_forwarded{false};
     // "host:port" of a Godzilla relay server, used when two players can't connect directly.
-    // Empty disables the relay.
-    Setting<std::string> relay_server{""};
+    // Empty disables the relay. Defaults to the Godzilla community relay.
+    Setting<std::string> relay_server{"skibidirizzlin.duckdns.org:3659"};
     Setting<bool> disable_https{false};
     Setting<bool> enable_device_discovery{false};
 
