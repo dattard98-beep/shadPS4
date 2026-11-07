@@ -7,7 +7,10 @@ Two players who cannot reach each other directly both send their packets here; t
 forwards each packet to the other player in the same session. See src/core/net/p2p_relay.h for
 the wire format. No game data is read or stored.
 
-Usage: python3 gz_relay.py [--port 3659]
+Usage: python3 gz_relay.py [--port 3659] [--duckdns-domain NAME --duckdns-token TOKEN]
+
+With the DuckDNS options it also keeps NAME.duckdns.org pointed at this machine's public IP
+(checked every 5 minutes), so no separate updater is needed.
 """
 
 import argparse
@@ -15,6 +18,8 @@ import asyncio
 import logging
 import struct
 import time
+import urllib.parse
+import urllib.request
 
 MAGIC = b"GZRY"
 VERSION = 1
@@ -101,15 +106,49 @@ class Relay(asyncio.DatagramProtocol):
         self.rate = {a: w for a, w in self.rate.items() if now - w[0] < 5.0}
 
 
+DUCKDNS_INTERVAL = 300
+
+
+def duckdns_update(domain, token):
+    query = urllib.parse.urlencode({"domains": domain, "token": token, "ip": ""})
+    url = "https://www.duckdns.org/update?" + query
+    with urllib.request.urlopen(url, timeout=15) as reply:
+        return reply.read().decode("ascii", "replace").strip()
+
+
+async def duckdns_loop(domain, token):
+    loop = asyncio.get_running_loop()
+    last = None
+    while True:
+        try:
+            result = await loop.run_in_executor(None, duckdns_update, domain, token)
+        except Exception as error:  # network hiccup: try again next round
+            result = "error: %s" % error
+        if result != last:
+            if result == "OK":
+                logging.info("DuckDNS: %s.duckdns.org points at this PC", domain)
+            elif result == "KO":
+                logging.error("DuckDNS: update refused. Check the domain name and token.")
+            else:
+                logging.warning("DuckDNS: %s (will retry)", result)
+            last = result
+        await asyncio.sleep(DUCKDNS_INTERVAL)
+
+
 async def main():
     parser = argparse.ArgumentParser(description="shadPS4 P2P relay")
     parser.add_argument("--host", default="0.0.0.0")
     parser.add_argument("--port", type=int, default=3659)
+    parser.add_argument("--duckdns-domain", help="DuckDNS name without .duckdns.org")
+    parser.add_argument("--duckdns-token", help="DuckDNS token (keep it private)")
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
     loop = asyncio.get_running_loop()
     _, relay = await loop.create_datagram_endpoint(Relay, local_addr=(args.host, args.port))
     logging.info("Relay running on UDP port %d", args.port)
+    if args.duckdns_domain and args.duckdns_token:
+        domain = args.duckdns_domain.replace(".duckdns.org", "")
+        asyncio.ensure_future(duckdns_loop(domain, args.duckdns_token))
     while True:
         await asyncio.sleep(10)
         relay.cleanup()
