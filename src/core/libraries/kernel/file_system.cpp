@@ -41,6 +41,7 @@
 #include "core/libraries/kernel/posix_error.h"
 #include "core/libraries/libs.h"
 #include "core/libraries/net/net_kernel.h"
+#include "core/libraries/np/np_godzilla_mods.h"
 #include "core/memory.h"
 #include "kernel.h"
 
@@ -262,6 +263,12 @@ s32 PS4_SYSV_ABI open(const char* raw_path, s32 flags, u16 mode) {
     bool read_only = false;
     file->m_guest_name = path;
     file->m_host_name = mnt->GetHostPath(file->m_guest_name, &read_only);
+    if (read && !create) {
+        // Godzilla online: the opponent's monster may come from a temporary patched copy.
+        if (auto redirected = Libraries::Np::GodzillaMods::Redirect(file->m_guest_name)) {
+            file->m_host_name = *redirected;
+        }
+    }
     bool exists = mnt->Exists(file->m_guest_name);
 
     if (create) {
@@ -1026,6 +1033,13 @@ s32 PS4_SYSV_ABI posix_stat(const char* path, OrbisKernelStat* sb) {
         }
         sb->st_ino = fst.inode;
         sb->st_size = static_cast<s64>(fst.size);
+        if (const auto redirected = Libraries::Np::GodzillaMods::PeekRedirect(path)) {
+            std::error_code size_ec;
+            const auto size = fs::file_size(*redirected, size_ec);
+            if (!size_ec) {
+                sb->st_size = static_cast<s64>(size);
+            }
+        }
         if (fst.mtime_sec != 0 || fst.mtime_nsec != 0) {
             sb->st_mtim.tv_sec = fst.mtime_sec;
             sb->st_mtim.tv_nsec = fst.mtime_nsec;

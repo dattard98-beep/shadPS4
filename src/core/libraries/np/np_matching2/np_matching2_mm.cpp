@@ -19,6 +19,7 @@
 #include "core/libraries/net/net_p2p.h"
 #include "core/libraries/net/net_upnp.h"
 #include "core/libraries/np/np_error.h"
+#include "core/libraries/np/np_godzilla_mods.h"
 #include "core/libraries/np/np_handler/np_handler.h"
 #include "core/libraries/np/np_matching2/np_matching2_internal.h"
 #include "core/libraries/np/np_matching2/np_matching2_mm.h"
@@ -593,6 +594,7 @@ void HandleRoomEvent(const ShadNet::NotifyRoomEvent& n) {
             break;
         }
         case ORBIS_NP_MATCHING2_ROOM_EVENT_UPDATED_ROOM_DATA_INTERNAL: {
+            GodzillaMods::OnMatchStart();
             auto room_it = cache->rooms.find(room_id);
             if (room_it == cache->rooms.end()) {
                 return;

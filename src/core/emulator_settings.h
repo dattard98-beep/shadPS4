@@ -246,6 +246,8 @@ struct NetworkSettings {
     // "host:port" of a Godzilla relay server, used when two players can't connect directly.
     // Empty disables the relay. Defaults to the Godzilla community relay.
     Setting<std::string> relay_server{"skibidirizzlin.duckdns.org:3659"};
+    // Godzilla: share the picked monster's modded files with the opponent for each match.
+    Setting<bool> mod_sync{true};
     Setting<bool> disable_https{false};
     Setting<bool> enable_device_discovery{false};
 
@@ -262,6 +264,7 @@ struct NetworkSettings {
             make_override<NetworkSettings>("p2p_port_forwarded",
                                            &NetworkSettings::p2p_port_forwarded),
             make_override<NetworkSettings>("relay_server", &NetworkSettings::relay_server),
+            make_override<NetworkSettings>("mod_sync", &NetworkSettings::mod_sync),
             make_override<NetworkSettings>("disable_https", &NetworkSettings::disable_https),
             make_override<NetworkSettings>("enable_device_discovery",
                                            &NetworkSettings::enable_device_discovery)};
@@ -270,7 +273,7 @@ struct NetworkSettings {
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(NetworkSettings, connected_to_network, shad_net_enabled,
                                    shadnet_server, shadnet_webapi_server, enable_upnp, p2p_port,
-                                   p2p_port_forwarded, relay_server, disable_https,
+                                   p2p_port_forwarded, relay_server, mod_sync, disable_https,
                                    enable_device_discovery)
 
 // -------------------------------
@@ -736,6 +739,7 @@ public:
     SETTING_FORWARD(m_network, P2PPort, p2p_port)
     SETTING_FORWARD_BOOL(m_network, P2PPortForwarded, p2p_port_forwarded)
     SETTING_FORWARD(m_network, RelayServer, relay_server)
+    SETTING_FORWARD_BOOL(m_network, ModSync, mod_sync)
     SETTING_FORWARD_BOOL(m_network, ForcedHttpsDisabled, disable_https)
     SETTING_FORWARD_BOOL(m_network, DeviceDiscoveryEnabled, enable_device_discovery)
 

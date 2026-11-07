@@ -28,7 +28,13 @@ namespace {
 
 using Host::Error;
 
-enum SignalingChannel : size_t { Signaling = 0, Control = 1, Matching2 = 2, ChannelCount };
+enum SignalingChannel : size_t {
+    Signaling = 0,
+    Control = 1,
+    Matching2 = 2,
+    ModSync = 3,
+    ChannelCount
+};
 
 size_t ClassifySignaling(std::span<const u8> packet) {
     if (packet.size() < 5 || std::memcmp(packet.data(), "SHAD", 4) != 0) {
@@ -39,6 +45,8 @@ size_t ClassifySignaling(std::span<const u8> packet) {
         return Control;
     case 0x21:
         return Matching2;
+    case 0x40: // Godzilla mod sync (core/godzilla/mod_sync.h)
+        return ModSync;
     default:
         return Signaling;
     }
@@ -89,6 +97,7 @@ u16 StartLocked(P2PState& state, u16 udp_port, bool allow_fallback) {
     }
     P2P::TransportConfig config;
     config.signaling_channels = ChannelCount;
+    config.signaling_queue_packets = 1024; // mod sync sends bursts of up to 256 segments
     config.classify_signaling = ClassifySignaling;
     const auto try_port = [&](u16 port, Error* error) {
         auto codec = std::make_unique<P2P::FramingCodec>(state.keyring, LogBroadcast);
@@ -310,6 +319,14 @@ int P2PMatching2SendTo(const void* data, u32 len, u32 dest_addr, u16 dest_port) 
 
 int P2PMatching2RecvFrom(void* buf, u32 len, u32* from_addr, u16* from_port) {
     return ChannelRecvFrom(Matching2, buf, len, from_addr, from_port);
+}
+
+int P2PModSyncSendTo(const void* data, u32 len, u32 dest_addr, u16 dest_port) {
+    return ChannelSendTo(data, len, dest_addr, dest_port);
+}
+
+int P2PModSyncRecvFrom(void* buf, u32 len, u32* from_addr, u16* from_port) {
+    return ChannelRecvFrom(ModSync, buf, len, from_addr, from_port);
 }
 
 namespace {

@@ -5,12 +5,15 @@
 #include <cstdint>
 #include <cstring>
 #include <memory>
+#include <thread>
+#include <type_traits>
 #include <fmt/format.h>
 #include "common/logging/log.h"
 #include "core/emulator_settings.h"
 #include "core/libraries/error_codes.h"
 #include "core/libraries/libs.h"
 #include "core/libraries/net/net.h"
+#include "core/libraries/np/np_godzilla_mods.h"
 #include "core/libraries/np/np_handler/np_handler.h"
 #include "core/libraries/np/np_manager.h"
 #include "core/libraries/np/np_matching2/np_matching2.h"
@@ -1053,6 +1056,40 @@ int PS4_SYSV_ABI sceNpMatching2SetRoomMemberDataInternal(
     if (resolved.memberId == 0 && ctx->my_member_id != 0) {
         LOG_INFO(Lib_NpMatching2, "memberId 0 -> own member id {}", ctx->my_member_id);
         resolved.memberId = ctx->my_member_id;
+    }
+
+    // Godzilla mod sharing: don't report ready while the opponent's monster files are still
+    // downloading, or the match could load without them.
+    const bool is_ready =
+        resolved.roomMemberBinAttrInternalNum > 0 &&
+        resolved.roomMemberBinAttrInternal[0].dataSize > 0 &&
+        resolved.roomMemberBinAttrInternal[0].data != nullptr &&
+        static_cast<const u8*>(resolved.roomMemberBinAttrInternal[0].data)[0] == 1;
+    if (is_ready && GodzillaMods::HoldReady()) {
+        using BinAttr =
+            std::remove_cv_t<std::remove_pointer_t<decltype(resolved.roomMemberBinAttrInternal)>>;
+        auto bins = std::make_shared<std::vector<BinAttr>>();
+        auto buffers = std::make_shared<std::vector<std::vector<u8>>>();
+        for (u64 i = 0; i < resolved.roomMemberBinAttrInternalNum; ++i) {
+            const auto& src = resolved.roomMemberBinAttrInternal[i];
+            const auto* bytes = static_cast<const u8*>(src.data);
+            buffers->emplace_back(bytes, bytes + src.dataSize);
+        }
+        for (u64 i = 0; i < resolved.roomMemberBinAttrInternalNum; ++i) {
+            BinAttr copy = resolved.roomMemberBinAttrInternal[i];
+            copy.data = (*buffers)[i].data();
+            bins->push_back(copy);
+        }
+        LOG_INFO(Lib_NpMatching2, "ModSync: holding our ready until mod downloads finish");
+        std::thread([ctxId, reqId, resolved, bins, buffers]() mutable {
+            while (GodzillaMods::HoldReady()) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(100));
+            }
+            LOG_INFO(Lib_NpMatching2, "ModSync: downloads done, sending our ready");
+            resolved.roomMemberBinAttrInternal = bins->data();
+            MmSetRoomMemberDataInternal(ctxId, reqId, resolved);
+        }).detach();
+        return ORBIS_OK;
     }
     MmSetRoomMemberDataInternal(ctxId, reqId, resolved);
     return ORBIS_OK;

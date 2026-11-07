@@ -644,6 +644,8 @@ set(NP_LIBS src/core/libraries/np/np_error.h
             src/core/libraries/np/np_matching2/np_matching2_internal.cpp
             src/core/libraries/np/np_matching2/np_matching2_internal.h
             src/core/libraries/np/np_matching2/np_matching2_mm.cpp
+            src/core/libraries/np/np_godzilla_mods.cpp
+            src/core/libraries/np/np_godzilla_mods.h
             src/core/libraries/np/np_matching2/np_matching2_mm.h
             src/core/libraries/np/np_matching2/np_matching2_signaling.cpp
             src/core/libraries/np/np_matching2/np_matching2_signaling.h
@@ -880,6 +882,10 @@ set(NET_CORE  src/core/net/guest_net.cpp
               src/core/net/p2p_crypto.h
               src/core/net/p2p_tcp.cpp
               src/core/net/p2p_tcp.h
+              src/core/godzilla/mod_sync.cpp
+              src/core/godzilla/mod_sync.h
+              src/core/godzilla/pac.cpp
+              src/core/godzilla/pac.h
               src/core/net/p2p_relay.cpp
               src/core/net/p2p_relay.h
               src/core/net/p2p_transport.cpp

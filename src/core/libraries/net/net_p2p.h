@@ -32,6 +32,8 @@ int P2PControlSendTo(const void* data, u32 len, u32 dest_addr, u16 dest_port);
 int P2PControlRecvFrom(void* buf, u32 len, u32* from_addr, u16* from_port);
 int P2PMatching2SendTo(const void* data, u32 len, u32 dest_addr, u16 dest_port);
 int P2PMatching2RecvFrom(void* buf, u32 len, u32* from_addr, u16* from_port);
+int P2PModSyncSendTo(const void* data, u32 len, u32 dest_addr, u16 dest_port);
+int P2PModSyncRecvFrom(void* buf, u32 len, u32* from_addr, u16* from_port);
 
 // Relay fallback (see core/net/p2p_relay.h). Addresses and ports in network order.
 void P2PRelayUpdate(const std::string& server); // applies the setting, sends keepalives
