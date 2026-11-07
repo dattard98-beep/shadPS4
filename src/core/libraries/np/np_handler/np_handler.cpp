@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cstring>
+#include <mutex>
 #include <fmt/format.h>
 #include "common/elf_info.h"
 #include "common/logging/log.h"
@@ -680,6 +681,19 @@ std::string NpHandler::GetNpCommId(s32 service_label) const {
                         "service_label={} >= npbind entry count {} — falling back "
                         "to index 0",
                         service_label, ids.size());
+        }
+    }
+    if (!IsValidNpCommId(com_id)) {
+        // Godzilla dumps often ship an encrypted npbind.dat. Its ID is known, so use it
+        // instead of making every player replace the file.
+        const auto serial = Common::ElfInfo::Instance().GameSerial();
+        if (serial == "CUSA02046" || serial == "CUSA02058") {
+            static std::once_flag logged;
+            std::call_once(logged, [] {
+                LOG_INFO(NpHandler, "npbind.dat unreadable; using Godzilla's NP Communication "
+                                    "ID NPWR08361_00");
+            });
+            com_id = "NPWR08361_00";
         }
     }
     if (com_id.size() < COM_ID_LEN) {
