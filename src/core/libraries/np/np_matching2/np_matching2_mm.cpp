@@ -33,6 +33,24 @@ namespace Libraries::Np::NpMatching2 {
 namespace {
 
 void ProcessOpenHostSearchReply(shadnet::SearchRoomReply& reply);
+void HandleRoomEvent(const ShadNet::NotifyRoomEvent& n);
+
+// shadNet tells the other room members about a SetRoomMemberDataInternal but not the member
+// that sent it. Godzilla waits for that event for its own member too before it shows itself as
+// ready, so the update is replayed locally once the server accepts it.
+struct SelfMemberUpdate {
+    OrbisNpMatching2RoomId room_id = 0;
+    OrbisNpMatching2RoomMemberId member_id = 0;
+    u32 team_id = 0;
+    u32 flag_filter = 0;
+    u32 flag_attr = 0;
+    std::vector<ShadNet::MatchingBinAttr> bins;
+};
+std::mutex g_self_update_mutex;
+std::map<std::pair<OrbisNpMatching2ContextId, OrbisNpMatching2RequestId>, SelfMemberUpdate>
+    g_self_updates;
+void EchoSelfMemberUpdate(OrbisNpMatching2ContextId ctx_id, OrbisNpMatching2RequestId req_id,
+                          bool success);
 
 struct PendingRequest {
     OrbisNpMatching2ContextId ctx_id = 0;
@@ -328,6 +346,10 @@ void DispatchRequestComplete(const PendingRequest& pr, ShadNet::ErrorType error,
     ev.request_data = request_data;
     ev.payload_owner = std::move(request_payload_owner);
     ScheduleEvent(std::move(ev));
+
+    if (pr.req_event == ORBIS_NP_MATCHING2_REQUEST_EVENT_SET_ROOM_MEMBER_DATA_INTERNAL) {
+        EchoSelfMemberUpdate(pr.ctx_id, pr.req_id, error_code == 0);
+    }
 
     if (error_code == 0 && (pr.req_event == ORBIS_NP_MATCHING2_REQUEST_EVENT_JOIN_ROOM ||
                             pr.req_event == ORBIS_NP_MATCHING2_REQUEST_EVENT_JOIN_ROOM_A)) {
@@ -843,6 +865,50 @@ void AppendOpenHostFilter(shadnet::SearchRoomRequest& req,
 }
 
 // Logs each found room's host status and removes the tag so the game only sees its own data.
+void EchoSelfMemberUpdate(OrbisNpMatching2ContextId ctx_id, OrbisNpMatching2RequestId req_id,
+                          bool success) {
+    SelfMemberUpdate u;
+    {
+        std::lock_guard lock(g_self_update_mutex);
+        const auto it = g_self_updates.find({ctx_id, req_id});
+        if (it == g_self_updates.end()) {
+            return;
+        }
+        u = std::move(it->second);
+        g_self_updates.erase(it);
+    }
+    if (!success) {
+        return;
+    }
+    ShadNet::NotifyRoomEvent n;
+    n.ctx_id = ctx_id;
+    n.room_id = u.room_id;
+    n.event = ORBIS_NP_MATCHING2_ROOM_EVENT_UPDATED_ROOM_MEMBER_DATA_INTERNAL;
+    n.event_cause = ORBIS_NP_MATCHING2_EVENT_CAUSE_SERVER_OPERATION;
+    n.member_id = u.member_id;
+    n.member_team_id = u.team_id;
+    {
+        auto cache = NpHandler::GetInstance().LockMatching2Cache(ctx_id);
+        const auto room_it = cache->rooms.find(u.room_id);
+        if (room_it == cache->rooms.end()) {
+            return;
+        }
+        const auto member_it = room_it->second.members.find(u.member_id);
+        if (member_it == room_it->second.members.end()) {
+            return;
+        }
+        const u32 filter = u.flag_filter & ~ORBIS_NP_MATCHING2_ROOMMEMBER_FLAG_ATTR_OWNER;
+        n.member_flag_attr = (member_it->second.flag_attr & ~filter) | (u.flag_attr & filter);
+        n.member_group_id = member_it->second.group_id;
+    }
+    n.member_bin_attrs = std::move(u.bins);
+    LOG_INFO(Lib_NpMatching2,
+             "room {}: our member data update accepted; telling the game "
+             "(member {})",
+             u.room_id, u.member_id);
+    HandleRoomEvent(n);
+}
+
 void ProcessOpenHostSearchReply(shadnet::SearchRoomReply& reply) {
     if (!OpenHostMatchingActive()) {
         return;
@@ -1443,6 +1509,31 @@ s32 MmSetRoomMemberDataInternal(OrbisNpMatching2ContextId ctx_id, OrbisNpMatchin
     for (u64 i = 0; i < request.roomMemberBinAttrInternalNum; ++i) {
         LogBinAttr("  memberInternalBin", i, request.roomMemberBinAttrInternal[i]);
         AppendBinAttr(req.add_bin_attrs(), request.roomMemberBinAttrInternal[i]);
+    }
+    if (OpenHostMatchingActive()) {
+        SelfMemberUpdate u;
+        u.room_id = request.roomId;
+        u.member_id = request.memberId;
+        u.team_id = request.teamId;
+        u.flag_filter = request.flagFilter;
+        u.flag_attr = request.flagAttr;
+        const u64 now = static_cast<u64>(std::chrono::duration_cast<std::chrono::microseconds>(
+                                             std::chrono::system_clock::now().time_since_epoch())
+                                             .count());
+        for (u64 i = 0; i < request.roomMemberBinAttrInternalNum; ++i) {
+            const auto& src = request.roomMemberBinAttrInternal[i];
+            ShadNet::MatchingBinAttr bin;
+            bin.attr_id = src.id;
+            bin.update_date = now;
+            bin.update_member_id = request.memberId;
+            const auto* bytes = static_cast<const u8*>(src.data);
+            if (bytes != nullptr) {
+                bin.data.assign(bytes, bytes + src.dataSize);
+            }
+            u.bins.push_back(std::move(bin));
+        }
+        std::lock_guard lock(g_self_update_mutex);
+        g_self_updates[{ctx_id, req_id}] = std::move(u);
     }
     return MmSubmitRequest(ctx_id, req_id,
                            ORBIS_NP_MATCHING2_REQUEST_EVENT_SET_ROOM_MEMBER_DATA_INTERNAL,
