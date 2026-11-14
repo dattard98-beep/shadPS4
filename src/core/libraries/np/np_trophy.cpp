@@ -1069,6 +1069,9 @@ int PS4_SYSV_ABI sceNpTrophyUnlockTrophy(OrbisNpTrophyContext context, OrbisNpTr
 
     if (platinumId == nullptr)
         return ORBIS_NP_TROPHY_ERROR_INVALID_ARGUMENT;
+    // No platinum unlocked unless found below. Paths that return early must not leave the
+    // game's variable uninitialized.
+    *platinumId = ORBIS_NP_TROPHY_INVALID_TROPHY_ID;
 
     Common::SlotId contextId;
     contextId.index = context - 1;
