@@ -818,7 +818,7 @@ struct Manager::Impl {
     // Both players picked the same monster: the game keeps textures by name, so the second
     // copy would show the first one's textures. Give theirs different names.
     void BuildMirror(Peer& p) {
-        const fs::path out = p.patched_char->string() + ".mirror.pac";
+        const fs::path out = p.patched_char->string() + ".mirror2.pac";
         std::error_code ec;
         if (!fs::exists(out, ec)) {
             const auto src = PacArchive::Open(*p.patched_char);
@@ -833,7 +833,7 @@ struct Manager::Impl {
         }
         p.mirror_char = out;
         Log(LogLevel::Info, "same monster as '" + p.info.name +
-                                "': their textures get their own names so both versions show");
+                                "': their model and textures get their own names so both versions show");
     }
 
     std::optional<fs::path> GamePatchFor(const std::string& lang) {
@@ -1119,7 +1119,7 @@ std::optional<fs::path> Manager::Redirect(const std::string& guest_path, bool pe
     const bool mirror = monster == d.my_monster && p.mirror_char;
     if (!peek) {
         d.Log(LogLevel::Info, "loading '" + p.info.name + "''s " + MonsterName(monster) +
-                                  (mirror ? " (renamed textures)" : ""));
+                                  (mirror ? " (renamed model and textures)" : ""));
     }
     return mirror ? p.mirror_char : p.patched_char;
 }

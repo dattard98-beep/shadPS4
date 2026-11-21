@@ -95,10 +95,11 @@ bool LzsUnpack(const std::vector<u8>& entry, std::vector<u8>* out);
 // Packs `raw` as literals only, keeping the other header fields of `original`.
 std::vector<u8> LzsStore(const std::vector<u8>& raw, const std::vector<u8>& original);
 
-// Writes a copy of `base` in which every texture the monster's files name by path
-// ("chr/chNN/<name>.dds") gets a different first letter: in the entry table, in the texture's
-// own data and in every reference to it. The game keeps loaded textures by name, so two players
-// using different versions of the same monster need different names to see both.
+// Writes a copy of `base` in which every entry the monster's files name by path
+// ("chr/chNN/<name>": textures, model, animation set) gets a different first letter, in the
+// entry table, in the entries' own data, in every reference and in the character script. The
+// game keeps loaded models and textures by name, so two players using different versions of the
+// same monster need different names to see both.
 bool BuildRenamedPac(const PacArchive& base, const std::filesystem::path& out, std::string* error);
 
 } // namespace Core::Godzilla

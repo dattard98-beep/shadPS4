@@ -311,6 +311,21 @@ std::vector<u8> LzsStore(const std::vector<u8>& raw, const std::vector<u8>& orig
 
 namespace {
 
+// Replaces every occurrence of `from` with `to` (same length). Returns the count.
+size_t ReplaceAll(std::vector<u8>* data, const std::string& from, const std::string& to) {
+    size_t count = 0;
+    auto it = data->begin();
+    while (true) {
+        it = std::search(it, data->end(), from.begin(), from.end());
+        if (it == data->end()) {
+            return count;
+        }
+        std::copy(to.begin(), to.end(), it);
+        it += static_cast<std::ptrdiff_t>(to.size());
+        ++count;
+    }
+}
+
 // Finds "chr/chNN/<name>" in `data` and, when `to` is given, rewrites <name> (same length).
 // Returns how many it found.
 size_t ChrPaths(std::vector<u8>* data, const std::string& name, const std::string* to) {
@@ -338,10 +353,9 @@ size_t ChrPaths(std::vector<u8>* data, const std::string& name, const std::strin
 } // namespace
 
 bool BuildRenamedPac(const PacArchive& base, const std::filesystem::path& out, std::string* error) {
-    // Unpack every LZS entry once; textures are the ones named by path somewhere.
+    // Unpack every entry once (LZS ones unpacked, others as stored).
     std::map<std::string, std::vector<u8>> raw;
     std::map<std::string, std::vector<u8>> stored;
-    std::set<std::string> referenced;
     for (const auto& e : base.Entries()) {
         std::vector<u8> data;
         if (!base.ReadEntry(e, &data)) {
@@ -349,16 +363,23 @@ bool BuildRenamedPac(const PacArchive& base, const std::filesystem::path& out, s
             return false;
         }
         std::vector<u8> plain;
-        if (!IsLzs(data) || !LzsUnpack(data, &plain)) {
+        if (IsLzs(data)) {
+            if (!LzsUnpack(data, &plain)) {
+                continue;
+            }
+        } else if (e.name.ends_with(".s")) {
+            plain = data; // character scripts may be stored as is
+        } else {
             continue;
         }
         raw[e.name] = std::move(plain);
         stored[e.name] = std::move(data);
     }
+    // Everything the monster names by path ("chr/chNN/<entry>") gets a new name: its
+    // textures, and also its model and animation set, which the game otherwise reuses from
+    // whichever copy loaded first (with that copy's textures).
+    std::set<std::string> referenced;
     for (const auto& e : base.Entries()) {
-        if (!e.name.ends_with(".dds")) {
-            continue;
-        }
         for (auto& [name, data] : raw) {
             if (ChrPaths(&data, e.name, nullptr) > 0) {
                 referenced.insert(e.name);
@@ -376,7 +397,7 @@ bool BuildRenamedPac(const PacArchive& base, const std::filesystem::path& out, s
         renames[name] = to;
     }
     if (renames.empty()) {
-        *error = "no textures to rename";
+        *error = "nothing to rename";
         return false;
     }
     std::map<std::string, PacBlob> replace;
@@ -384,13 +405,17 @@ bool BuildRenamedPac(const PacArchive& base, const std::filesystem::path& out, s
         size_t changed = 0;
         for (const auto& [from, to] : renames) {
             changed += ChrPaths(&data, from, &to);
+            if (name.ends_with(".s")) {
+                // The script loads the model and animations by entry name.
+                changed += ReplaceAll(&data, from, to);
+            }
         }
         if (changed == 0) {
             continue;
         }
-        std::vector<u8> packed = LzsStore(data, stored[name]);
+        std::vector<u8> packed = IsLzs(stored[name]) ? LzsStore(data, stored[name]) : data;
         // Keep the name stored in the LZS header in step too.
-        if (const auto r = renames.find(name); r != renames.end()) {
+        if (const auto r = renames.find(name); r != renames.end() && IsLzs(packed)) {
             const auto end = std::find(packed.begin() + 0x20, packed.begin() + ReadU32(&packed[8]),
                                        u8{0});
             if (static_cast<size_t>(end - (packed.begin() + 0x20)) == r->second.size()) {
