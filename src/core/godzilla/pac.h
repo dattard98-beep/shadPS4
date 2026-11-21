@@ -15,7 +15,7 @@
 //   then the NUL-terminated names, then each entry's data (usually LZS compressed) at
 //   32-byte aligned offsets.
 //
-// Entries are copied as stored; nothing here decompresses them.
+// Entries are copied as stored, except by BuildRenamedPac, which unpacks the ones it changes.
 
 #pragma once
 
@@ -85,5 +85,20 @@ struct PacBlob {
 // exist in `base`. Writes to a temporary file and renames it into place.
 bool BuildPatchedPac(const PacArchive& base, const std::map<std::string, PacBlob>& replace,
                      const std::filesystem::path& out, std::string* error);
+
+// LZS, the game's entry compression: a header ("LZS\0", u32 params, u32 header size,
+// u32 literal offset, u32 unpacked size, u32 packed size, ...), then 16-bit flag words
+// (bit set = next literal byte, bit clear = u16 match: length = (t & 31) + 2, distance = t >> 5),
+// with the literal bytes stored together from the literal offset on.
+bool IsLzs(const std::vector<u8>& entry);
+bool LzsUnpack(const std::vector<u8>& entry, std::vector<u8>* out);
+// Packs `raw` as literals only, keeping the other header fields of `original`.
+std::vector<u8> LzsStore(const std::vector<u8>& raw, const std::vector<u8>& original);
+
+// Writes a copy of `base` in which every texture the monster's files name by path
+// ("chr/chNN/<name>.dds") gets a different first letter: in the entry table, in the texture's
+// own data and in every reference to it. The game keeps loaded textures by name, so two players
+// using different versions of the same monster need different names to see both.
+bool BuildRenamedPac(const PacArchive& base, const std::filesystem::path& out, std::string* error);
 
 } // namespace Core::Godzilla

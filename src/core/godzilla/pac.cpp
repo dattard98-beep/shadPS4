@@ -1,8 +1,11 @@
 // SPDX-FileCopyrightText: Copyright 2026 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <algorithm>
+#include <cctype>
 #include <cstring>
 #include <fstream>
+#include <set>
 #include <system_error>
 
 #include <openssl/evp.h>
@@ -233,6 +236,200 @@ bool BuildPatchedPac(const PacArchive& base, const std::map<std::string, PacBlob
             *error = "cannot move " + tmp + " into place: " + ec.message();
             return false;
         }
+    }
+    return true;
+}
+
+bool IsLzs(const std::vector<u8>& entry) {
+    return entry.size() >= 0x20 && std::memcmp(entry.data(), "LZS\0", 4) == 0;
+}
+
+bool LzsUnpack(const std::vector<u8>& e, std::vector<u8>* out) {
+    if (!IsLzs(e)) {
+        return false;
+    }
+    const u32 header = ReadU32(&e[8]);
+    const u32 literals = ReadU32(&e[12]);
+    const u32 size = ReadU32(&e[16]);
+    if (header > literals || literals > e.size() || size > (1u << 30)) {
+        return false;
+    }
+    out->clear();
+    out->reserve(size);
+    size_t i = header;
+    size_t lit = literals;
+    while (out->size() < size) {
+        if (i + 2 > literals) {
+            return false;
+        }
+        const u32 flags = e[i] | e[i + 1] << 8;
+        i += 2;
+        for (int f = 0; f < 16 && out->size() < size; ++f) {
+            if (flags >> f & 1) {
+                if (lit >= e.size()) {
+                    return false;
+                }
+                out->push_back(e[lit++]);
+                continue;
+            }
+            if (i + 2 > literals) {
+                return false;
+            }
+            const u32 t = e[i] | e[i + 1] << 8;
+            i += 2;
+            const size_t len = (t & 31) + 2;
+            const size_t dist = t >> 5;
+            if (dist == 0 || dist > out->size()) {
+                return false;
+            }
+            for (size_t k = 0; k < len; ++k) {
+                out->push_back((*out)[out->size() - dist]);
+            }
+        }
+    }
+    out->resize(size);
+    return true;
+}
+
+std::vector<u8> LzsStore(const std::vector<u8>& raw, const std::vector<u8>& original) {
+    const u32 header = ReadU32(&original[8]);
+    std::vector<u8> e(original.begin(), original.begin() + header);
+    const size_t groups = (raw.size() + 15) / 16;
+    for (size_t g = 0; g < groups; ++g) {
+        const size_t count = std::min<size_t>(16, raw.size() - g * 16);
+        const u32 flags = static_cast<u32>((1u << count) - 1);
+        e.push_back(static_cast<u8>(flags));
+        e.push_back(static_cast<u8>(flags >> 8));
+    }
+    const u32 literals = static_cast<u32>(e.size());
+    WriteU32(&e[12], literals);
+    WriteU32(&e[16], static_cast<u32>(raw.size()));
+    WriteU32(&e[20], static_cast<u32>(literals + raw.size()));
+    e.insert(e.end(), raw.begin(), raw.end());
+    return e;
+}
+
+namespace {
+
+// Finds "chr/chNN/<name>" in `data` and, when `to` is given, rewrites <name> (same length).
+// Returns how many it found.
+size_t ChrPaths(std::vector<u8>* data, const std::string& name, const std::string* to) {
+    const std::string needle = "/" + name;
+    size_t count = 0;
+    auto it = data->begin();
+    while (true) {
+        it = std::search(it, data->end(), needle.begin(), needle.end());
+        if (it == data->end()) {
+            return count;
+        }
+        const size_t pos = static_cast<size_t>(it - data->begin());
+        const auto& d = *data;
+        if (pos >= 8 && std::memcmp(&d[pos - 8], "chr/ch", 6) == 0 && std::isdigit(d[pos - 2]) &&
+            std::isdigit(d[pos - 1])) {
+            if (to) {
+                std::copy(to->begin(), to->end(), it + 1);
+            }
+            ++count;
+        }
+        it += static_cast<std::ptrdiff_t>(needle.size());
+    }
+}
+
+} // namespace
+
+bool BuildRenamedPac(const PacArchive& base, const std::filesystem::path& out, std::string* error) {
+    // Unpack every LZS entry once; textures are the ones named by path somewhere.
+    std::map<std::string, std::vector<u8>> raw;
+    std::map<std::string, std::vector<u8>> stored;
+    std::set<std::string> referenced;
+    for (const auto& e : base.Entries()) {
+        std::vector<u8> data;
+        if (!base.ReadEntry(e, &data)) {
+            *error = "cannot read entry " + e.name;
+            return false;
+        }
+        std::vector<u8> plain;
+        if (!IsLzs(data) || !LzsUnpack(data, &plain)) {
+            continue;
+        }
+        raw[e.name] = std::move(plain);
+        stored[e.name] = std::move(data);
+    }
+    for (const auto& e : base.Entries()) {
+        if (!e.name.ends_with(".dds")) {
+            continue;
+        }
+        for (auto& [name, data] : raw) {
+            if (ChrPaths(&data, e.name, nullptr) > 0) {
+                referenced.insert(e.name);
+                break;
+            }
+        }
+    }
+    std::map<std::string, std::string> renames;
+    for (const auto& name : referenced) {
+        std::string to = name;
+        to[0] = to[0] == 'z' ? 'y' : 'z';
+        if (base.Find(to)) {
+            continue; // would collide with an existing entry; leave it
+        }
+        renames[name] = to;
+    }
+    if (renames.empty()) {
+        *error = "no textures to rename";
+        return false;
+    }
+    std::map<std::string, PacBlob> replace;
+    for (auto& [name, data] : raw) {
+        size_t changed = 0;
+        for (const auto& [from, to] : renames) {
+            changed += ChrPaths(&data, from, &to);
+        }
+        if (changed == 0) {
+            continue;
+        }
+        std::vector<u8> packed = LzsStore(data, stored[name]);
+        // Keep the name stored in the LZS header in step too.
+        if (const auto r = renames.find(name); r != renames.end()) {
+            const auto end = std::find(packed.begin() + 0x20, packed.begin() + ReadU32(&packed[8]),
+                                       u8{0});
+            if (static_cast<size_t>(end - (packed.begin() + 0x20)) == r->second.size()) {
+                std::copy(r->second.begin(), r->second.end(), packed.begin() + 0x20);
+            }
+        }
+        PacBlob blob;
+        blob.data = std::move(packed);
+        blob.stamp = base.Find(name)->stamp;
+        replace[name] = std::move(blob);
+    }
+    const auto tmp = std::filesystem::path(out.string() + ".names");
+    if (!BuildPatchedPac(base, replace, tmp, error)) {
+        return false;
+    }
+    // Rename the entries in the table: names are stored once each, same length.
+    {
+        std::fstream f(tmp, std::ios::binary | std::ios::in | std::ios::out);
+        const std::vector<u8>& head = base.Head();
+        for (size_t i = 0; i < base.Entries().size(); ++i) {
+            const auto r = renames.find(base.Entries()[i].name);
+            if (r == renames.end()) {
+                continue;
+            }
+            const u32 name_off = ReadU32(&head[kHeaderSize + i * kEntrySize + 16]);
+            f.seekp(name_off);
+            f.write(r->second.data(), static_cast<std::streamsize>(r->second.size()));
+        }
+        if (!f) {
+            *error = "cannot rename entries in " + tmp.string();
+            return false;
+        }
+    }
+    std::error_code ec;
+    std::filesystem::remove(out, ec);
+    std::filesystem::rename(tmp, out, ec);
+    if (ec) {
+        *error = "cannot move " + tmp.string() + " into place: " + ec.message();
+        return false;
     }
     return true;
 }

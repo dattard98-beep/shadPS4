@@ -306,6 +306,8 @@ struct Peer {
     bool ready = false;
     bool gave_up = false;
     std::optional<fs::path> patched_char;
+    // Their monster file with its textures renamed, for when we picked the same monster.
+    std::optional<fs::path> mirror_char;
     std::map<std::string, std::pair<Digest, u32>> game_entries; // name -> digest, stamp
     std::deque<std::pair<u8, std::string>> requested;
     std::optional<Outgoing> sending;
@@ -800,6 +802,9 @@ struct Manager::Impl {
                 p.patched_char = out;
             }
         }
+        if (p.patched_char && p.info.monster == my_monster) {
+            BuildMirror(p);
+        }
         p.ready = true;
         if (!p.game_entries.empty() && p.info.monster != my_monster) {
             GamePatchFor(lang_file); // build now so the match load doesn't wait for it
@@ -808,6 +813,27 @@ struct Manager::Impl {
             "'" + p.info.name + "' (" + MonsterName(p.manifest->monster) + ") is ready: " +
                 (p.patched_char || !p.game_entries.empty() ? "their version will be shown"
                                                            : "same files as ours"));
+    }
+
+    // Both players picked the same monster: the game keeps textures by name, so the second
+    // copy would show the first one's textures. Give theirs different names.
+    void BuildMirror(Peer& p) {
+        const fs::path out = p.patched_char->string() + ".mirror.pac";
+        std::error_code ec;
+        if (!fs::exists(out, ec)) {
+            const auto src = PacArchive::Open(*p.patched_char);
+            std::string error;
+            if (!src || !BuildRenamedPac(*src, out, &error)) {
+                Log(LogLevel::Warning, "cannot give '" + p.info.name +
+                                           "''s textures their own names (" +
+                                           (src ? error : "unreadable file") +
+                                           "); both may look the same");
+                return;
+            }
+        }
+        p.mirror_char = out;
+        Log(LogLevel::Info, "same monster as '" + p.info.name +
+                                "': their textures get their own names so both versions show");
     }
 
     std::optional<fs::path> GamePatchFor(const std::string& lang) {
@@ -1090,10 +1116,12 @@ std::optional<fs::path> Manager::Redirect(const std::string& guest_path, bool pe
     if (!p.ready || !p.patched_char) {
         return std::nullopt;
     }
+    const bool mirror = monster == d.my_monster && p.mirror_char;
     if (!peek) {
-        d.Log(LogLevel::Info, "loading '" + p.info.name + "''s " + MonsterName(monster));
+        d.Log(LogLevel::Info, "loading '" + p.info.name + "''s " + MonsterName(monster) +
+                                  (mirror ? " (renamed textures)" : ""));
     }
-    return p.patched_char;
+    return mirror ? p.mirror_char : p.patched_char;
 }
 
 Manager& Instance() {
