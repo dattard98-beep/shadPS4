@@ -19,12 +19,6 @@ endif()
 
 project(shadPS4 CXX C ASM ${ADDITIONAL_LANGUAGES})
 
-# Newer MSVC standard libraries reject clang-cl releases older than the one they were built
-# against; the build works with them, so allow the mismatch.
-if (WIN32)
-    add_compile_definitions(_ALLOW_COMPILER_AND_STL_VERSION_MISMATCH)
-endif()
-
 include(FetchContent)
 
 # Forcing PIE makes sure that the base address is high enough so that it doesn't clash with the PS4 memory.
