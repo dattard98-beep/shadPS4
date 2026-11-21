@@ -352,6 +352,11 @@ else()
     set(LIBRESSL_SKIP_INSTALL ON CACHE BOOL "" FORCE)
     set(LIBRESSL_APPS OFF CACHE BOOL "" FORCE)
     set(LIBRESSL_TESTS OFF CACHE BOOL "" FORCE)
+    if (WIN32)
+        # Newer Windows toolchains ship an endian.h without the BSD byte-order helpers;
+        # LibreSSL then skips its own definitions of be32toh and friends. Use its own.
+        set(HAVE_ENDIAN_H "" CACHE INTERNAL "")
+    endif()
     add_subdirectory(libressl EXCLUDE_FROM_ALL)
     get_directory_property(SSL_DEPENDENCIES DIRECTORY libressl DEFINITION OPENSSL_LIBS)
 endif()
