@@ -175,6 +175,12 @@ jobs:
     - name: Print CPU Info
       run: bash -c "cat /proc/cpuinfo"
 
+    # The image's MSVC standard library needs Clang 22 or newer; its preinstalled LLVM is older.
+    - name: Update LLVM
+      run: |
+        choco upgrade llvm -y --no-progress
+        & "C:\Program Files\LLVM\bin\clang-cl.exe" --version
+
     - name: Configure CMake
       run: cmake --fresh -G Ninja -B ${{github.workspace}}/build -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}} -DCMAKE_INTERPROCEDURAL_OPTIMIZATION_RELEASE=ON -DCMAKE_C_COMPILER=clang-cl -DCMAKE_CXX_COMPILER=clang-cl -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
 
