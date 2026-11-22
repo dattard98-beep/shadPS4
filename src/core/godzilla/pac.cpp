@@ -292,20 +292,92 @@ bool LzsUnpack(const std::vector<u8>& e, std::vector<u8>* out) {
 }
 
 std::vector<u8> LzsStore(const std::vector<u8>& raw, const std::vector<u8>& original) {
+    // Real compression (back-references up to 33 bytes long, 2047 back), so a rewritten
+    // copy stays about the size of the original: the game reads a monster's file into a
+    // fixed-size buffer, and a copy stored without compression did not fit.
+    constexpr size_t kMaxLen = 33;
+    constexpr size_t kMinLen = 3;
+    constexpr size_t kWindow = 2047;
+    constexpr int kChain = 48;
+    constexpr u32 kHashBits = 15;
     const u32 header = ReadU32(&original[8]);
     std::vector<u8> e(original.begin(), original.begin() + header);
-    const size_t groups = (raw.size() + 15) / 16;
-    for (size_t g = 0; g < groups; ++g) {
-        const size_t count = std::min<size_t>(16, raw.size() - g * 16);
-        const u32 flags = static_cast<u32>((1u << count) - 1);
-        e.push_back(static_cast<u8>(flags));
-        e.push_back(static_cast<u8>(flags >> 8));
+    std::vector<u8> literals;
+    literals.reserve(raw.size() / 2);
+    std::vector<s32> head(size_t{1} << kHashBits, -1);
+    std::vector<s32> prev(raw.size(), -1);
+    const auto hash = [&](size_t i) {
+        const u32 v = raw[i] | raw[i + 1] << 8 | raw[i + 2] << 16;
+        return (v * 2654435761u) >> (32 - kHashBits);
+    };
+    const auto insert = [&](size_t i) {
+        if (i + 2 < raw.size()) {
+            const u32 h = hash(i);
+            prev[i] = head[h];
+            head[h] = static_cast<s32>(i);
+        }
+    };
+    size_t flag_pos = 0;
+    int flag_bit = 16;
+    const auto put = [&](bool literal) {
+        if (flag_bit == 16) {
+            flag_pos = e.size();
+            e.push_back(0);
+            e.push_back(0);
+            flag_bit = 0;
+        }
+        if (literal) {
+            e[flag_pos + (flag_bit >> 3)] |= static_cast<u8>(1u << (flag_bit & 7));
+        }
+        ++flag_bit;
+    };
+    size_t i = 0;
+    while (i < raw.size()) {
+        size_t best_len = 0;
+        size_t best_dist = 0;
+        if (i + kMinLen <= raw.size()) {
+            const size_t limit = std::min(kMaxLen, raw.size() - i);
+            s32 c = head[hash(i)];
+            for (int n = 0; n < kChain && c >= 0 && i - static_cast<size_t>(c) <= kWindow;
+                 ++n, c = prev[c]) {
+                const size_t j = static_cast<size_t>(c);
+                if (raw[j + best_len] != raw[i + best_len]) {
+                    continue;
+                }
+                size_t len = 0;
+                while (len < limit && raw[j + len] == raw[i + len]) {
+                    ++len;
+                }
+                if (len > best_len) {
+                    best_len = len;
+                    best_dist = i - j;
+                    if (len == limit) {
+                        break;
+                    }
+                }
+            }
+        }
+        if (best_len >= kMinLen) {
+            put(false);
+            const u32 t = static_cast<u32>(best_dist << 5 | (best_len - 2));
+            e.push_back(static_cast<u8>(t));
+            e.push_back(static_cast<u8>(t >> 8));
+            for (size_t k = 0; k < best_len; ++k) {
+                insert(i + k);
+            }
+            i += best_len;
+        } else {
+            put(true);
+            literals.push_back(raw[i]);
+            insert(i);
+            ++i;
+        }
     }
-    const u32 literals = static_cast<u32>(e.size());
-    WriteU32(&e[12], literals);
+    const u32 literal_start = static_cast<u32>(e.size());
+    WriteU32(&e[12], literal_start);
     WriteU32(&e[16], static_cast<u32>(raw.size()));
-    WriteU32(&e[20], static_cast<u32>(literals + raw.size()));
-    e.insert(e.end(), raw.begin(), raw.end());
+    WriteU32(&e[20], static_cast<u32>(literal_start + literals.size()));
+    e.insert(e.end(), literals.begin(), literals.end());
     return e;
 }
 
@@ -426,8 +498,8 @@ bool BuildRenamedPac(const PacArchive& base, const std::filesystem::path& out, s
         std::vector<u8> packed = IsLzs(stored[name]) ? LzsStore(data, stored[name]) : data;
         // Keep the name stored in the LZS header in step too.
         if (const auto r = renames.find(name); r != renames.end() && IsLzs(packed)) {
-            const auto end = std::find(packed.begin() + 0x20, packed.begin() + ReadU32(&packed[8]),
-                                       u8{0});
+            const auto end =
+                std::find(packed.begin() + 0x20, packed.begin() + ReadU32(&packed[8]), u8{0});
             if (static_cast<size_t>(end - (packed.begin() + 0x20)) == r->second.size()) {
                 std::copy(r->second.begin(), r->second.end(), packed.begin() + 0x20);
             }

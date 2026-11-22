@@ -70,7 +70,7 @@ bool Apply(u8* code, u64 file_size, const std::function<u8*(u64)>& allocate, std
 
     // The new code lives in the module's trampoline area: the zero tail of the code segment is
     // where other Godzilla patches (Kaiju Skin Select) put theirs.
-    constexpr size_t kCaveSize = 64;
+    constexpr size_t kCaveSize = 128;
     u8* cave = allocate(kCaveSize);
     if (!cave) {
         *message = "no room for the patch; same-monster mods stay off";
@@ -81,7 +81,7 @@ bool Apply(u8* code, u64 file_size, const std::function<u8*(u64)>& allocate, std
     u8* find_resource = call_site + 8 + ReadS32(call_site + 4);
     u8* resume = call_site + 8;
 
-    std::array<u8, 47> c{};
+    std::array<u8, 96> c{};
     size_t n = 0;
     auto put = [&](std::initializer_list<u8> bytes) {
         for (const u8 b : bytes) {
@@ -102,6 +102,18 @@ bool Apply(u8* code, u64 file_size, const std::function<u8*(u64)>& allocate, std
     // skip:
     put({0x4c, 0x89, 0xf7}); // mov rdi,r14
     put({0xe8, 0, 0, 0, 0}); // call find_resource
+    WriteS32(&c[n - 4], static_cast<s32>(find_resource - (cave + n)));
+    // Safety net: if the renamed script is not there (their copy did not load), look up the
+    // normal one instead of handing the game nothing, which crashes it.
+    put({0x48, 0x85, 0xc0});       // test rax,rax
+    put({0x0f, 0x85, 0, 0, 0, 0}); // jnz resume
+    WriteS32(&c[n - 4], static_cast<s32>(resume - (cave + n)));
+    put({0x41, 0x80, 0x7e, 0x04, 0x61}); // cmp byte [r14+4],'a'
+    put({0x0f, 0x84, 0, 0, 0, 0});       // je resume (was the normal name already)
+    WriteS32(&c[n - 4], static_cast<s32>(resume - (cave + n)));
+    put({0x41, 0xc6, 0x46, 0x04, 0x61}); // mov byte [r14+4],'a'
+    put({0x4c, 0x89, 0xf7});             // mov rdi,r14
+    put({0xe8, 0, 0, 0, 0});             // call find_resource
     WriteS32(&c[n - 4], static_cast<s32>(find_resource - (cave + n)));
     put({0xe9, 0, 0, 0, 0}); // jmp resume
     WriteS32(&c[n - 4], static_cast<s32>(resume - (cave + n)));

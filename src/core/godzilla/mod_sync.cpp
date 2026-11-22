@@ -882,11 +882,11 @@ struct Manager::Impl {
     // copy would show the first one's textures. Give theirs different names.
     void BuildMirror(Peer& p) {
         const fs::path out =
-            p.patched_char ? fs::path{p.patched_char->string() + ".mirror3.pac"}
+            p.patched_char ? fs::path{p.patched_char->string() + ".mirror4.pac"}
                            : cache_dir / "patched" /
                                  (p.manifest->File(kCharFile)->file + "." +
                                   DigestHex(FileKey(*p.manifest->File(kCharFile))).substr(0, 16) +
-                                  ".mirror3.pac");
+                                  ".mirror4.pac");
         std::error_code ec;
         if (!fs::exists(out, ec)) {
             fs::create_directories(out.parent_path(), ec);
