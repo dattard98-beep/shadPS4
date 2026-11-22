@@ -12,6 +12,7 @@
 #include <mutex>
 #include <set>
 #include <system_error>
+#include <thread>
 
 #include "core/godzilla/mirror_patch.h"
 #include "core/godzilla/mod_sync.h"
@@ -36,6 +37,10 @@ constexpr u32 kMaxWholeBytes = 96u << 20;
 constexpr u64 kMaxPeerBytes = 160ull << 20;
 constexpr Proto::Millis kNoManifestGiveUp = 12'000;
 constexpr Proto::Millis kHoldLimit = 120'000;
+// How long to wait for a player who picked a monster but is not connected to us yet.
+constexpr Proto::Millis kConnectWait = 30'000;
+// How long a monster file open may wait for the opponent's files to arrive.
+constexpr Proto::Millis kLoadWait = 25'000;
 
 enum FileKind : u8 { kCharFile = 0, kGameFile = 1 };
 enum MsgType : u8 { kMsgManifest = 'M', kMsgRequest = 'R', kMsgData = 'D', kMsgDone = 'Z' };
@@ -1063,8 +1068,14 @@ bool Manager::HoldReady() {
         return false;
     }
     bool waiting = false;
+    const Proto::Millis now = NowMs();
     for (auto& [id, p] : d.peers) {
-        if (p.info.connected && !p.ready && !p.gave_up) {
+        if (p.ready || p.gave_up) {
+            continue;
+        }
+        // Not connected yet (e.g. still switching to the relay): wait for them too, or the
+        // match starts before their files can arrive.
+        if (p.info.connected || (p.info.monster != 0 && now - d.room_since < kConnectWait)) {
             waiting = true;
         }
     }
@@ -1080,7 +1091,7 @@ bool Manager::HoldReady() {
 
 std::optional<fs::path> Manager::Redirect(const std::string& guest_path, bool peek) {
     auto& d = *impl_;
-    std::scoped_lock lock{d.mutex};
+    std::unique_lock lock{d.mutex};
     if (!d.enabled || d.room_id == 0) {
         return std::nullopt;
     }
@@ -1115,16 +1126,43 @@ std::optional<fs::path> Manager::Redirect(const std::string& guest_path, bool pe
     if (index >= order.size() || order[index].second == nullptr) {
         return std::nullopt;
     }
-    Peer& p = *order[index].second;
+    const u16 member = order[index].first;
+    Peer* pp = order[index].second;
+    if (!peek && !pp->ready && !pp->gave_up) {
+        // The match is loading before their files arrived: wait here (the loading screen
+        // just stays up a little longer) rather than load our own version for them.
+        d.Log(LogLevel::Info, "waiting for '" + pp->info.name + "''s " + MonsterName(monster) +
+                                  " before loading it");
+        const Proto::Millis start = NowMs();
+        while (true) {
+            lock.unlock();
+            std::this_thread::sleep_for(std::chrono::milliseconds(50));
+            lock.lock();
+            const auto it = d.peers.find(member);
+            pp = it == d.peers.end() ? nullptr : &it->second;
+            if (!pp || pp->ready || pp->gave_up || d.room_id == 0) {
+                break;
+            }
+            if (NowMs() - start > kLoadWait) {
+                d.Log(LogLevel::Warning, "'" + pp->info.name + "''s files did not arrive in time; "
+                                         "loading our own version for them");
+                return std::nullopt;
+            }
+        }
+        if (!pp) {
+            return std::nullopt;
+        }
+    }
+    Peer& p = *pp;
     if (!p.ready || !p.patched_char) {
         return std::nullopt;
     }
     const bool mirror = monster == d.my_monster && p.mirror_char && MirrorPatch::Active();
     if (mirror && !peek) {
         // The game's player slots follow member order.
-        int slot = d.my_member < order[index].first ? 1 : 0;
+        int slot = d.my_member < member ? 1 : 0;
         for (const auto& entry : d.peers) {
-            slot += entry.first < order[index].first ? 1 : 0;
+            slot += entry.first < member ? 1 : 0;
         }
         MirrorPatch::SetSlot(slot, 'z');
     }
