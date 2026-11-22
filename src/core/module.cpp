@@ -1,6 +1,9 @@
 // SPDX-FileCopyrightText: Copyright 2024-2026 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <array>
+#include <cstring>
+
 #include <fmt/format.h>
 #include "common/alignment.h"
 #include "common/arch.h"
@@ -14,6 +17,7 @@
 #include "core/godzilla/exact_math.h"
 #include "core/godzilla/label_wait.h"
 #include "core/godzilla/mirror_patch.h"
+#include "core/godzilla/skin_select.h"
 #include "core/libraries/error_codes.h"
 #include "core/loader/dwarf.h"
 #include "core/memory.h"
@@ -134,14 +138,32 @@ void Module::ApplyGodzillaMirrorPatch() {
                  "Godzilla: render thread sleeps while it waits for the GPU ({} of 4 "
                  "wait loops replaced)",
                  waits);
-#endif
-        const bool applied =
-            Core::Godzilla::MirrorPatch::Apply(code, phdr.p_filesz, GetAlignedSize(phdr), &message);
+        const bool applied = Core::Godzilla::MirrorPatch::Apply(
+            code, phdr.p_filesz,
+            [this](u64 size) {
+                return AllocateTrampolineMemory(reinterpret_cast<void*>(base_virtual_addr), size);
+            },
+            &message);
+        // Kaiju Skin Select's patch (both game versions) starts its file-name hook here and keeps
+        // its per-kaiju skin table in the data segment's spare tail.
+        static constexpr std::array<u8, 13> SkinHook{0x53, 0x41, 0x54, 0x48, 0x83, 0xec, 0x08,
+                                                     0x48, 0x89, 0xfb, 0x41, 0x89, 0xd4};
+        static constexpr u64 SkinHookAt = 0x64f520;
+        static constexpr u64 SkinTableAt = 0xb3e500;
+        if (serial == "CUSA02046" && SkinTableAt + 0x18 <= aligned_base_size &&
+            SkinHookAt + SkinHook.size() <= GetAlignedSize(phdr) &&
+            std::memcmp(code + SkinHookAt, SkinHook.data(), SkinHook.size()) == 0) {
+            Core::Godzilla::SkinSelect::SetTable(
+                reinterpret_cast<const volatile u8*>(base_virtual_addr + SkinTableAt));
+            LOG_INFO(Core_Linker,
+                     "Godzilla: Kaiju Skin Select found; picked skins are shared online");
+        }
         if (applied) {
             LOG_INFO(Core_Linker, "Godzilla: {}", message);
         } else {
             LOG_WARNING(Core_Linker, "Godzilla: {}", message);
         }
+#endif
         return;
     }
 }

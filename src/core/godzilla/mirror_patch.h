@@ -11,16 +11,17 @@
 
 #pragma once
 
+#include <functional>
 #include <string>
 
 #include "common/types.h"
 
 namespace Core::Godzilla::MirrorPatch {
 
-// Patches the game's character setup in the executable segment [code, code + mem_size), of which
-// the first file_size bytes come from the file; new code goes in the zero padding after that.
-// Does nothing unless the expected instructions are found. Returns true when applied.
-bool Apply(u8* code, u64 file_size, u64 mem_size, std::string* message);
+// Patches the game's character setup in the executable segment [code, code + file_size); new code
+// goes in memory from allocate (within rel32 reach). Does nothing unless the expected instructions
+// are found. Returns true when applied.
+bool Apply(u8* code, u64 file_size, const std::function<u8*(u64)>& allocate, std::string* message);
 
 bool Active();
 

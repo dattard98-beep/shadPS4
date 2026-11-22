@@ -890,6 +890,8 @@ set(NET_CORE  src/core/net/guest_net.cpp
               src/core/godzilla/label_wait.h
               src/core/godzilla/mirror_patch.cpp
               src/core/godzilla/mirror_patch.h
+              src/core/godzilla/skin_select.cpp
+              src/core/godzilla/skin_select.h
               src/core/godzilla/pac.cpp
               src/core/godzilla/pac.h
               src/core/net/p2p_relay.cpp

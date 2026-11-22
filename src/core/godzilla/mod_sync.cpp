@@ -17,6 +17,7 @@
 #include "core/godzilla/mirror_patch.h"
 #include "core/godzilla/mod_sync.h"
 #include "core/godzilla/pac.h"
+#include "core/godzilla/skin_select.h"
 #include "core/libraries/rudp/rudp_core.h"
 
 namespace Core::Godzilla::ModSync {
@@ -30,7 +31,7 @@ using Clock = std::chrono::steady_clock;
 
 constexpr u16 kVport = 0x4d53; // "MS"
 constexpr int32_t kSocket = 1;
-constexpr u8 kProtocolVersion = 1;
+constexpr u8 kProtocolVersion = 2; // 2: the manifest says which skin (file letter) is played
 constexpr size_t kChunk = 48 * 1024;
 constexpr u32 kMaxEntryBytes = 64u << 20;
 constexpr u32 kMaxWholeBytes = 96u << 20;
@@ -74,6 +75,8 @@ std::string MonsterName(u8 ch) {
         return "Mecha-King Ghidorah";
     case 7:
         return "Hedorah";
+    case 8:
+        return "Godzilla (1964)";
     case 9:
         return "Mechagodzilla (1974)";
     case 10:
@@ -91,7 +94,7 @@ std::string MonsterName(u8 ch) {
     case 17:
         return "Mechagodzilla 2";
     case 18:
-        return "ch18";
+        return "Burning Godzilla";
     case 19:
         return "SpaceGodzilla";
     case 20:
@@ -107,8 +110,22 @@ std::string MonsterName(u8 ch) {
     }
 }
 
-std::string CharFileName(u8 ch) {
-    return "ch" + Hex2(ch) + "a_00.pac";
+std::string CharFileName(u8 ch, char letter = 'a') {
+    return "ch" + Hex2(ch) + letter + "_00.pac";
+}
+
+// "chNNx_00.pac" with x the skin letter: the monster number, or 0 when the name is not one.
+u8 MonsterOfCharFile(const std::string& name) {
+    if (name.size() != 12 || !name.starts_with("ch") || !name.ends_with("_00.pac") ||
+        name[2] < '0' || name[2] > '9' || name[3] < '0' || name[3] > '9' || name[4] < 'a' ||
+        name[4] > 'y') {
+        return 0;
+    }
+    return static_cast<u8>((name[2] - '0') * 10 + (name[3] - '0'));
+}
+
+std::string SkinText(char letter) {
+    return letter == 'a' ? std::string{} : std::string{" skin "} + letter;
 }
 
 std::string Mb(u64 bytes) {
@@ -209,6 +226,7 @@ struct ManifestFile {
 
 struct Manifest {
     u8 monster = 0;
+    char letter = 'a';
     std::vector<ManifestFile> files;
 
     const ManifestFile* File(u8 kind) const {
@@ -226,6 +244,7 @@ std::vector<u8> EncodeManifest(const Manifest& m) {
     w.U8(kMsgManifest);
     w.U8(kProtocolVersion);
     w.U8(m.monster);
+    w.U8(static_cast<u8>(m.letter));
     w.U16(static_cast<u16>(m.files.size()));
     for (const auto& f : m.files) {
         w.U8(f.kind);
@@ -243,11 +262,13 @@ std::vector<u8> EncodeManifest(const Manifest& m) {
 
 bool DecodeManifest(Reader& r, Manifest* m) {
     u8 version;
+    u8 letter;
     u16 nfiles;
-    if (!r.U8(&version) || version != kProtocolVersion || !r.U8(&m->monster) || !r.U16(&nfiles) ||
-        nfiles > 4) {
+    if (!r.U8(&version) || version != kProtocolVersion || !r.U8(&m->monster) || !r.U8(&letter) ||
+        letter < 'a' || letter > 'y' || !r.U16(&nfiles) || nfiles > 4) {
         return false;
     }
+    m->letter = static_cast<char>(letter);
     for (u16 i = 0; i < nfiles; ++i) {
         ManifestFile f;
         u16 n;
@@ -312,6 +333,9 @@ struct Peer {
     bool ready = false;
     bool gave_up = false;
     std::optional<fs::path> patched_char;
+    // The file their monster is loaded from on our side: the patched copy, or our own copy of
+    // the skin they play when it is the same.
+    std::optional<fs::path> load_char;
     // Their monster file with its textures renamed, for when we picked the same monster.
     std::optional<fs::path> mirror_char;
     std::map<std::string, std::pair<Digest, u32>> game_entries; // name -> digest, stamp
@@ -334,6 +358,7 @@ struct Manager::Impl {
     u32 room_id = 0;
     u16 my_member = 0;
     u8 my_monster = 0;
+    std::string my_char_file; // the file our game loads for our monster (skin letter included)
     Proto::Millis room_since = 0;
     bool hold_timeout_logged = false;
     std::map<u16, Peer> peers;
@@ -344,6 +369,20 @@ struct Manager::Impl {
         if (hooks.log) {
             hooks.log(level, "ModSync: " + text);
         }
+    }
+
+    // Where the game reads a file of /app0 from: the -mods folder, then the update, then the
+    // game folder (the order shadPS4 mounts them in).
+    fs::path LocalPath(const std::string& name) const {
+        std::error_code ec;
+        for (const char* suffix : {"-mods", "-UPDATE", "-patch"}) {
+            fs::path overlay = game_dir;
+            overlay += suffix;
+            if (fs::is_regular_file(overlay / name, ec)) {
+                return overlay / name;
+            }
+        }
+        return game_dir / name;
     }
 
     const PacArchive* Archive(const fs::path& path) {
@@ -396,11 +435,19 @@ struct Manager::Impl {
     std::optional<Manifest> LocalManifest(u8 monster) {
         Manifest m;
         m.monster = monster;
-        const PacArchive* ch = Archive(game_dir / CharFileName(monster));
+        m.letter = SkinSelect::Letter(monster);
+        const PacArchive* ch = Archive(LocalPath(CharFileName(monster, m.letter)));
+        if (!ch && m.letter != 'a') {
+            Log(LogLevel::Warning, "skin " + std::string(1, m.letter) + " of " +
+                                       MonsterName(monster) + " is picked but its file is missing");
+            m.letter = 'a';
+            ch = Archive(LocalPath(CharFileName(monster)));
+        }
         if (!ch) {
             return std::nullopt;
         }
-        ManifestFile cf{kCharFile, CharFileName(monster), {}};
+        my_char_file = CharFileName(monster, m.letter);
+        ManifestFile cf{kCharFile, my_char_file, {}};
         std::set<std::string> names;
         for (const auto& e : ch->Entries()) {
             const auto d = ch->EntryDigest(e);
@@ -412,7 +459,7 @@ struct Manager::Impl {
         }
         m.files.push_back(std::move(cf));
         // The monster's copies in the language archive (Godzilla keeps its textures there too).
-        if (const PacArchive* game = Archive(game_dir / lang_file)) {
+        if (const PacArchive* game = Archive(LocalPath(lang_file))) {
             ManifestFile gf{kGameFile, lang_file, {}};
             const std::string sound = "sound_ch" + Hex2(monster) + ".snd";
             for (const auto& e : game->Entries()) {
@@ -504,7 +551,7 @@ struct Manager::Impl {
         size_t cached = 0;
 
         if (const ManifestFile* cf = m.File(kCharFile)) {
-            const PacArchive* local = Archive(game_dir / cf->file);
+            const PacArchive* local = Archive(LocalPath(cf->file));
             bool same_layout = local && local->Entries().size() == cf->entries.size();
             if (same_layout) {
                 for (size_t i = 0; i < cf->entries.size(); ++i) {
@@ -550,7 +597,7 @@ struct Manager::Impl {
             }
         }
         if (const ManifestFile* gf = m.File(kGameFile)) {
-            const PacArchive* local = Archive(game_dir / lang_file);
+            const PacArchive* local = Archive(LocalPath(lang_file));
             for (const auto& e : gf->entries) {
                 const PacEntry* le = local ? local->Find(e.name) : nullptr;
                 if (!le || (local->EntryDigest(*le) == e.digest && le->stamp == e.stamp)) {
@@ -586,12 +633,12 @@ struct Manager::Impl {
         p.bytes_expected = need_bytes;
         if (wanted.empty()) {
             Log(LogLevel::Info, "'" + p.info.name + "' (" + MonsterName(m.monster) +
-                                    "): nothing to download" +
+                                    SkinText(m.letter) + "): nothing to download" +
                                     (cached ? " (" + std::to_string(cached) + " from cache)" : ""));
         } else {
             Log(LogLevel::Info,
-                "'" + p.info.name + "' (" + MonsterName(m.monster) + "): downloading " +
-                    std::to_string(wanted.size()) + " file(s)" +
+                "'" + p.info.name + "' (" + MonsterName(m.monster) + SkinText(m.letter) +
+                    "): downloading " + std::to_string(wanted.size()) + " file(s)" +
                     (need_bytes ? ", " + Mb(need_bytes) : std::string{", whole monster file"}) +
                     (cached ? ", " + std::to_string(cached) + " already cached" : ""));
         }
@@ -622,7 +669,7 @@ struct Manager::Impl {
         out->name = name;
         out->offset = 0;
         if (kind == kCharFile && name == kWholeName) {
-            const fs::path path = game_dir / CharFileName(my_monster);
+            const fs::path path = LocalPath(my_char_file);
             std::error_code ec;
             const auto size = fs::file_size(path, ec);
             if (ec || size > kMaxWholeBytes) {
@@ -632,8 +679,7 @@ struct Manager::Impl {
             out->data.assign(std::istreambuf_iterator<char>(in), {});
             return out->data.size() == size;
         }
-        const fs::path path =
-            kind == kCharFile ? game_dir / CharFileName(my_monster) : game_dir / lang_file;
+        const fs::path path = LocalPath(kind == kCharFile ? my_char_file : lang_file);
         const PacArchive* pac = Archive(path);
         const PacEntry* e = pac ? pac->Find(name) : nullptr;
         return e && e->size <= kMaxEntryBytes && pac->ReadEntry(*e, &out->data);
@@ -798,7 +844,7 @@ struct Manager::Impl {
                 std::error_code ec;
                 std::string error;
                 if (!fs::exists(out, ec)) {
-                    const PacArchive* local = Archive(game_dir / cf->file);
+                    const PacArchive* local = Archive(LocalPath(cf->file));
                     if (!local || !BuildPatchedPac(*local, rep, out, &error)) {
                         Log(LogLevel::Warning, "cannot build " + cf->file + ": " + error);
                         p.gave_up = true;
@@ -808,7 +854,16 @@ struct Manager::Impl {
                 p.patched_char = out;
             }
         }
-        if (p.patched_char && p.info.monster == my_monster) {
+        const ManifestFile* their = p.manifest->File(kCharFile);
+        if (p.patched_char) {
+            p.load_char = p.patched_char;
+        } else if (their) {
+            p.load_char = LocalPath(their->file);
+        }
+        // A different file than ours for the same monster (their mods or their skin) needs its
+        // own names, or both players show whichever copy loads first.
+        if (p.load_char && p.info.monster == my_monster &&
+            (p.patched_char || (their && their->file != my_char_file))) {
             BuildMirror(p);
         }
         p.ready = true;
@@ -816,30 +871,38 @@ struct Manager::Impl {
             GamePatchFor(lang_file); // build now so the match load doesn't wait for it
         }
         Log(LogLevel::Info,
-            "'" + p.info.name + "' (" + MonsterName(p.manifest->monster) + ") is ready: " +
-                (p.patched_char || !p.game_entries.empty() ? "their version will be shown"
-                                                           : "same files as ours"));
+            "'" + p.info.name + "' (" + MonsterName(p.manifest->monster) +
+                SkinText(p.manifest->letter) + ") is ready: " +
+                (p.patched_char || !p.game_entries.empty() || p.manifest->letter != 'a'
+                     ? "their version will be shown"
+                     : "same files as ours"));
     }
 
     // Both players picked the same monster: the game keeps textures by name, so the second
     // copy would show the first one's textures. Give theirs different names.
     void BuildMirror(Peer& p) {
-        const fs::path out = p.patched_char->string() + ".mirror3.pac";
+        const fs::path out =
+            p.patched_char ? fs::path{p.patched_char->string() + ".mirror3.pac"}
+                           : cache_dir / "patched" /
+                                 (p.manifest->File(kCharFile)->file + "." +
+                                  DigestHex(FileKey(*p.manifest->File(kCharFile))).substr(0, 16) +
+                                  ".mirror3.pac");
         std::error_code ec;
         if (!fs::exists(out, ec)) {
-            const auto src = PacArchive::Open(*p.patched_char);
+            fs::create_directories(out.parent_path(), ec);
+            const auto src = PacArchive::Open(*p.load_char);
             std::string error;
             if (!src || !BuildRenamedPac(*src, out, &error)) {
-                Log(LogLevel::Warning, "cannot give '" + p.info.name +
-                                           "''s textures their own names (" +
-                                           (src ? error : "unreadable file") +
-                                           "); both may look the same");
+                Log(LogLevel::Warning,
+                    "cannot give '" + p.info.name + "''s textures their own names (" +
+                        (src ? error : "unreadable file") + "); both may look the same");
                 return;
             }
         }
         p.mirror_char = out;
-        Log(LogLevel::Info, "same monster as '" + p.info.name +
-                                "': their model and textures get their own names so both versions show");
+        Log(LogLevel::Info,
+            "same monster as '" + p.info.name +
+                "': their model and textures get their own names so both versions show");
     }
 
     std::optional<fs::path> GamePatchFor(const std::string& lang) {
@@ -864,7 +927,7 @@ struct Manager::Impl {
         if (rep.empty()) {
             return std::nullopt;
         }
-        const PacArchive* local = Archive(game_dir / lang);
+        const PacArchive* local = Archive(LocalPath(lang));
         if (!local) {
             return std::nullopt;
         }
@@ -1011,6 +1074,10 @@ void Manager::Tick() {
         }
         if (p.channel_up && !p.sent_manifest && d.my_monster != 0) {
             if (auto m = d.LocalManifest(d.my_monster)) {
+                if (m->letter != 'a') {
+                    d.Log(LogLevel::Info, "we play " + MonsterName(m->monster) +
+                                              SkinText(m->letter) + " (" + d.my_char_file + ")");
+                }
                 d.SendMessage(p, EncodeManifest(*m));
             }
             p.sent_manifest = true;
@@ -1106,10 +1173,11 @@ std::optional<fs::path> Manager::Redirect(const std::string& guest_path, bool pe
         }
         return path;
     }
-    if (!(name.size() == 12 && name.starts_with("ch") && name.ends_with("a_00.pac"))) {
+    // Any skin letter: with Kaiju Skin Select the game asks for the skin picked on this PC.
+    const u8 monster = MonsterOfCharFile(name);
+    if (monster == 0) {
         return std::nullopt;
     }
-    const u8 monster = static_cast<u8>((name[2] - '0') * 10 + (name[3] - '0'));
     // The game opens one file per player, in member order, even when two pick the same monster.
     std::vector<std::pair<u16, Peer*>> order; // member id, peer (nullptr = us)
     if (d.my_monster == monster) {
@@ -1144,8 +1212,9 @@ std::optional<fs::path> Manager::Redirect(const std::string& guest_path, bool pe
                 break;
             }
             if (NowMs() - start > kLoadWait) {
-                d.Log(LogLevel::Warning, "'" + pp->info.name + "''s files did not arrive in time; "
-                                         "loading our own version for them");
+                d.Log(LogLevel::Warning, "'" + pp->info.name +
+                                             "''s files did not arrive in time; "
+                                             "loading our own version for them");
                 return std::nullopt;
             }
         }
@@ -1154,7 +1223,9 @@ std::optional<fs::path> Manager::Redirect(const std::string& guest_path, bool pe
         }
     }
     Peer& p = *pp;
-    if (!p.ready || !p.patched_char) {
+    const ManifestFile* their = p.manifest ? p.manifest->File(kCharFile) : nullptr;
+    // Their monster comes from their files and their skin, whatever this PC's game asked for.
+    if (!p.ready || !p.load_char || (!p.patched_char && (!their || their->file == name))) {
         return std::nullopt;
     }
     const bool mirror = monster == d.my_monster && p.mirror_char && MirrorPatch::Active();
@@ -1168,9 +1239,10 @@ std::optional<fs::path> Manager::Redirect(const std::string& guest_path, bool pe
     }
     if (!peek) {
         d.Log(LogLevel::Info, "loading '" + p.info.name + "''s " + MonsterName(monster) +
+                                  SkinText(p.manifest->letter) + " for " + name +
                                   (mirror ? " (renamed model and textures)" : ""));
     }
-    return mirror ? p.mirror_char : p.patched_char;
+    return mirror ? p.mirror_char : p.load_char;
 }
 
 Manager& Instance() {

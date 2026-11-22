@@ -40,7 +40,7 @@ void WriteS32(u8* p, s32 v) {
 
 } // namespace
 
-bool Apply(u8* code, u64 file_size, u64 mem_size, std::string* message) {
+bool Apply(u8* code, u64 file_size, const std::function<u8*(u64)>& allocate, std::string* message) {
     if (g_active) {
         return true;
     }
@@ -68,19 +68,13 @@ bool Apply(u8* code, u64 file_size, u64 mem_size, std::string* message) {
         return false;
     }
 
-    // New code goes in the zero-filled tail of the executable segment.
+    // The new code lives in the module's trampoline area: the zero tail of the code segment is
+    // where other Godzilla patches (Kaiju Skin Select) put theirs.
     constexpr size_t kCaveSize = 64;
-    const u64 cave_off = (file_size + 0xff) & ~u64{0xff};
-    if (cave_off + kCaveSize > mem_size) {
+    u8* cave = allocate(kCaveSize);
+    if (!cave) {
         *message = "no room for the patch; same-monster mods stay off";
         return false;
-    }
-    u8* cave = code + cave_off;
-    for (size_t k = 0; k < kCaveSize; ++k) {
-        if (cave[k] != 0) {
-            *message = "patch area is not free; same-monster mods stay off";
-            return false;
-        }
     }
 
     u8* call_site = site + kFindCall;
@@ -118,8 +112,7 @@ bool Apply(u8* code, u64 file_size, u64 mem_size, std::string* message) {
     std::memcpy(call_site, jump, sizeof(jump));
 
     g_active = true;
-    *message = fmt::format("same-monster mods enabled (patch at +{:#x}, code at +{:#x})",
-                           call_site - code, cave_off);
+    *message = fmt::format("same-monster mods enabled (patch at +{:#x})", call_site - code);
     return true;
 }
 

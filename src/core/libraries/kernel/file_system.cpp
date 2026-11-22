@@ -272,7 +272,7 @@ s32 PS4_SYSV_ABI open(const char* raw_path, s32 flags, u16 mode) {
             file->m_host_name = *mod_redirect;
         }
     }
-    bool exists = mnt->Exists(file->m_guest_name);
+    bool exists = mod_redirect.has_value() || mnt->Exists(file->m_guest_name);
 
     if (create) {
         if (excl && exists) {
