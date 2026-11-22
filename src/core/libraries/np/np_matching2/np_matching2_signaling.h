@@ -17,6 +17,8 @@ void StartMatching2SignalingRuntime();
 // left behind by a crashed emulator). They are reported as dead to the game and hidden from
 // searches for a while.
 bool IsGhostRoom(OrbisNpMatching2RoomId room_id);
+// Keeps a room out of our search results for a while (a join to it failed for good).
+void HideRoomFromSearch(OrbisNpMatching2RoomId room_id);
 void CheckGhostRooms();
 
 // Open-host matchmaking (Godzilla only). A player whose P2P port can be reached from the

@@ -166,6 +166,10 @@ void QueueMatching2DeadForRoomPeers(ContextObject& ctx, OrbisNpMatching2RoomId r
     SignalingHandler::StopMatching2(ctx, room_id, error_code);
 }
 
+void HideRoomFromSearch(OrbisNpMatching2RoomId room_id) {
+    MarkGhostRoom(room_id);
+}
+
 bool IsGhostRoom(OrbisNpMatching2RoomId room_id) {
     std::lock_guard lock(g_ghost_mutex);
     const auto now = std::chrono::steady_clock::now();

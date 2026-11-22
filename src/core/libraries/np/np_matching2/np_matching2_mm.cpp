@@ -255,6 +255,17 @@ std::string ExtractProtoBytes(const std::vector<u8>& payload, size_t offset = 0)
     return std::string(reinterpret_cast<const char*>(payload.data() + offset + 4), len);
 }
 
+// Room each pending join is for, so a join that fails for good can hide that room.
+std::mutex g_join_mutex;
+std::map<std::pair<OrbisNpMatching2ContextId, OrbisNpMatching2RequestId>, OrbisNpMatching2RoomId>
+    g_join_rooms;
+
+void RememberJoin(OrbisNpMatching2ContextId ctx_id, OrbisNpMatching2RequestId req_id,
+                  OrbisNpMatching2RoomId room_id) {
+    std::lock_guard lock(g_join_mutex);
+    g_join_rooms[{ctx_id, req_id}] = room_id;
+}
+
 // The game treats only negative codes as failures; a raw server number (14 for a room that
 // is gone, say) reads as success and the game then uses room data that is not there.
 s32 ToSceError(ShadNet::ErrorType error) {
@@ -301,6 +312,24 @@ void DispatchRequestComplete(const PendingRequest& pr, ShadNet::ErrorType error,
     }
 
     const s32 error_code = ToSceError(error);
+    if (pr.req_event == ORBIS_NP_MATCHING2_REQUEST_EVENT_JOIN_ROOM ||
+        pr.req_event == ORBIS_NP_MATCHING2_REQUEST_EVENT_JOIN_ROOM_A) {
+        OrbisNpMatching2RoomId room_id = 0;
+        {
+            std::lock_guard lock(g_join_mutex);
+            if (const auto it = g_join_rooms.find({pr.ctx_id, pr.req_id});
+                it != g_join_rooms.end()) {
+                room_id = it->second;
+                g_join_rooms.erase(it);
+            }
+        }
+        if (room_id != 0 && (error == ShadNet::ErrorType::RoomMissing ||
+                             error == ShadNet::ErrorType::RoomAlreadyJoined ||
+                             error == ShadNet::ErrorType::RoomFull)) {
+            LOG_INFO(Lib_NpMatching2, "Search: hiding room {} (could not join it)", room_id);
+            HideRoomFromSearch(room_id);
+        }
+    }
     if (error_code != ORBIS_OK) {
         LOG_INFO(Lib_NpMatching2,
                  "request {} (event {:#x}) failed on the server: error {} -> {:#x}", pr.req_id,
@@ -1409,6 +1438,7 @@ s32 MmJoinRoom(OrbisNpMatching2ContextId ctx_id, OrbisNpMatching2RequestId req_i
     }
     req.set_room_password_present(request.roomPasswd != nullptr);
     req.set_join_group_label_present(request.joinGroupLabel != nullptr);
+    RememberJoin(ctx_id, req_id, request.roomId);
     return MmSubmitRequest(ctx_id, req_id, ORBIS_NP_MATCHING2_REQUEST_EVENT_JOIN_ROOM,
                            MmCommand::JoinRoom, MakeProtoPayload(req));
 }
@@ -1432,6 +1462,7 @@ s32 MmJoinRoomA(OrbisNpMatching2ContextId ctx_id, OrbisNpMatching2RequestId req_
     }
     req.set_room_password_present(request.roomPasswd != nullptr);
     req.set_join_group_label_present(request.joinGroupLabel != nullptr);
+    RememberJoin(ctx_id, req_id, request.roomId);
     return MmSubmitRequest(ctx_id, req_id, ORBIS_NP_MATCHING2_REQUEST_EVENT_JOIN_ROOM_A,
                            MmCommand::JoinRoom, MakeProtoPayload(req), true);
 }
