@@ -396,6 +396,16 @@ bool BuildRenamedPac(const PacArchive& base, const std::filesystem::path& out, s
         }
         renames[name] = to;
     }
+    // The character script ("chNNa_00.s") is looked up by name; see mirror_patch.h.
+    for (const auto& e : base.Entries()) {
+        if (e.name.size() == 10 && e.name.starts_with("ch") && e.name.ends_with("a_00.s")) {
+            std::string to = e.name;
+            to[4] = 'z';
+            if (!base.Find(to)) {
+                renames[e.name] = to;
+            }
+        }
+    }
     if (renames.empty()) {
         *error = "nothing to rename";
         return false;

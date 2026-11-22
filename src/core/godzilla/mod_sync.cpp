@@ -13,6 +13,7 @@
 #include <set>
 #include <system_error>
 
+#include "core/godzilla/mirror_patch.h"
 #include "core/godzilla/mod_sync.h"
 #include "core/godzilla/pac.h"
 #include "core/libraries/rudp/rudp_core.h"
@@ -818,7 +819,7 @@ struct Manager::Impl {
     // Both players picked the same monster: the game keeps textures by name, so the second
     // copy would show the first one's textures. Give theirs different names.
     void BuildMirror(Peer& p) {
-        const fs::path out = p.patched_char->string() + ".mirror2.pac";
+        const fs::path out = p.patched_char->string() + ".mirror3.pac";
         std::error_code ec;
         if (!fs::exists(out, ec)) {
             const auto src = PacArchive::Open(*p.patched_char);
@@ -970,12 +971,14 @@ void Manager::ClearRoom() {
     d.FlushEngine();
     d.peers.clear();
     d.opens.clear();
+    MirrorPatch::Reset();
     d.room_id = 0;
 }
 
 void Manager::OnMatchStart() {
     std::scoped_lock lock{impl_->mutex};
     impl_->opens.clear();
+    MirrorPatch::Reset();
 }
 
 void Manager::OnPacket(u32 addr, u16 port, const u8* data, size_t len) {
@@ -1116,7 +1119,15 @@ std::optional<fs::path> Manager::Redirect(const std::string& guest_path, bool pe
     if (!p.ready || !p.patched_char) {
         return std::nullopt;
     }
-    const bool mirror = monster == d.my_monster && p.mirror_char;
+    const bool mirror = monster == d.my_monster && p.mirror_char && MirrorPatch::Active();
+    if (mirror && !peek) {
+        // The game's player slots follow member order.
+        int slot = d.my_member < order[index].first ? 1 : 0;
+        for (const auto& entry : d.peers) {
+            slot += entry.first < order[index].first ? 1 : 0;
+        }
+        MirrorPatch::SetSlot(slot, 'z');
+    }
     if (!peek) {
         d.Log(LogLevel::Info, "loading '" + p.info.name + "''s " + MonsterName(monster) +
                                   (mirror ? " (renamed model and textures)" : ""));

@@ -217,6 +217,7 @@ public:
     }
 
     s32 Start(u64 args, const void* argp, void* param);
+    void ApplyGodzillaMirrorPatch();
     void LoadModuleToMemory(u32& max_tls_index);
     void LoadDynamicInfo();
     void LoadSymbols();

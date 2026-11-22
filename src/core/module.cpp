@@ -11,6 +11,7 @@
 #include "common/string_util.h"
 #include "core/aerolib/aerolib.h"
 #include "core/cpu_patches.h"
+#include "core/godzilla/mirror_patch.h"
 #include "core/libraries/error_codes.h"
 #include "core/loader/dwarf.h"
 #include "core/memory.h"
@@ -103,6 +104,28 @@ s32 Module::Start(u64 args, const void* argp, void* param) {
     LOG_INFO(Core_Linker, "Module started : {}", name);
     const VAddr addr = dynamic_info.init_virtual_addr + GetBaseAddress();
     return reinterpret_cast<EntryFunc>(addr)(args, argp, param);
+}
+
+void Module::ApplyGodzillaMirrorPatch() {
+    const auto& serial = MemoryPatcher::g_game_serial;
+    if (serial != "CUSA02046" && serial != "CUSA02058") {
+        return;
+    }
+    for (const auto& phdr : elf.GetProgramHeader()) {
+        if (phdr.p_type != PT_LOAD || (phdr.p_flags & PF_EXEC) == 0) {
+            continue;
+        }
+        std::string message;
+        auto* code = reinterpret_cast<u8*>(base_virtual_addr + phdr.p_vaddr);
+        const bool applied =
+            Core::Godzilla::MirrorPatch::Apply(code, phdr.p_filesz, GetAlignedSize(phdr), &message);
+        if (applied) {
+            LOG_INFO(Core_Linker, "Godzilla: {}", message);
+        } else {
+            LOG_WARNING(Core_Linker, "Godzilla: {}", message);
+        }
+        return;
+    }
 }
 
 void Module::LoadModuleToMemory(u32& max_tls_index) {
@@ -375,6 +398,7 @@ void Module::LoadModuleToMemory(u32& max_tls_index) {
             MemoryPatcher::g_eboot_image_size = base_size;
             MemoryPatcher::g_eboot_name = name;
             MemoryPatcher::OnGameLoaded();
+            ApplyGodzillaMirrorPatch();
         }
     }
 
