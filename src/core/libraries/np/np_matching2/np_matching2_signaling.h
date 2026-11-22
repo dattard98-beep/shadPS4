@@ -27,6 +27,9 @@ void CheckGhostRooms();
 constexpr u16 kOpenHostAttrId = 0x0053; // ROOM_SEARCHABLE_INT_ATTR_EXTERNAL_8_ID
 constexpr u32 kOpenHostValueOpen = 1;
 constexpr u32 kOpenHostValueBlocked = 2;
+// Builds that compute a match differently must not meet (2: exact math on every CPU).
+constexpr u16 kNetcodeAttrId = 0x0052; // ROOM_SEARCHABLE_INT_ATTR_EXTERNAL_7_ID
+constexpr u32 kNetcodeVersion = 2;
 bool OpenHostMatchingActive();
 bool IsLocalP2PReachable();
 void StopMatching2SignalingRuntime();

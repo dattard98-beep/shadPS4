@@ -848,10 +848,13 @@ void AppendOpenHostAttr(shadnet::CreateRoomRequest& req, const OrbisNpMatching2I
         return;
     }
     for (u64 i = 0; i < count; ++i) {
-        if (attrs && attrs[i].id == kOpenHostAttrId) {
+        if (attrs && (attrs[i].id == kOpenHostAttrId || attrs[i].id == kNetcodeAttrId)) {
             return; // the game uses this attribute itself
         }
     }
+    auto* netcode = req.add_external_search_int_attrs();
+    netcode->set_attr_id(kNetcodeAttrId);
+    netcode->set_attr_value(kNetcodeVersion);
     const bool open = IsLocalP2PReachable();
     auto* attr = req.add_external_search_int_attrs();
     attr->set_attr_id(kOpenHostAttrId);
@@ -863,7 +866,19 @@ void AppendOpenHostAttr(shadnet::CreateRoomRequest& req, const OrbisNpMatching2I
 // Open-host matchmaking: a blocked player only asks for rooms whose host is open.
 void AppendOpenHostFilter(shadnet::SearchRoomRequest& req,
                           const OrbisNpMatching2SearchRoomRequest& request) {
-    if (!OpenHostMatchingActive() || IsLocalP2PReachable()) {
+    if (!OpenHostMatchingActive()) {
+        return;
+    }
+    for (u64 i = 0; i < request.intFilters; ++i) {
+        if (request.intFilter[i].attr.id == kNetcodeAttrId) {
+            return;
+        }
+    }
+    auto* netcode = req.add_int_filters();
+    netcode->set_op(1); // equal
+    netcode->set_attr_id(kNetcodeAttrId);
+    netcode->set_attr_value(kNetcodeVersion);
+    if (IsLocalP2PReachable()) {
         return;
     }
     if (Net::P2PRelayConfigured()) {

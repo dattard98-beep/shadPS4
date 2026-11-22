@@ -11,6 +11,7 @@
 #include "common/string_util.h"
 #include "core/aerolib/aerolib.h"
 #include "core/cpu_patches.h"
+#include "core/godzilla/exact_math.h"
 #include "core/godzilla/mirror_patch.h"
 #include "core/libraries/error_codes.h"
 #include "core/loader/dwarf.h"
@@ -117,6 +118,15 @@ void Module::ApplyGodzillaMirrorPatch() {
         }
         std::string message;
         auto* code = reinterpret_cast<u8*>(base_virtual_addr + phdr.p_vaddr);
+#ifdef ARCH_X86_64
+        const auto math = Core::Godzilla::ExactMath::Apply(code, phdr.p_filesz, [this](u64 size) {
+            return AllocateTrampolineMemory(reinterpret_cast<void*>(base_virtual_addr), size);
+        });
+        LOG_INFO(Core_Linker,
+                 "Godzilla: exact math on every CPU: {} of {} reciprocal estimates rewritten "
+                 "({} left as they are, {} other forms seen)",
+                 math.rewritten, math.found, math.skipped, math.other);
+#endif
         const bool applied =
             Core::Godzilla::MirrorPatch::Apply(code, phdr.p_filesz, GetAlignedSize(phdr), &message);
         if (applied) {

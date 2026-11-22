@@ -884,6 +884,8 @@ set(NET_CORE  src/core/net/guest_net.cpp
               src/core/net/p2p_tcp.h
               src/core/godzilla/mod_sync.cpp
               src/core/godzilla/mod_sync.h
+              src/core/godzilla/exact_math.cpp
+              src/core/godzilla/exact_math.h
               src/core/godzilla/mirror_patch.cpp
               src/core/godzilla/mirror_patch.h
               src/core/godzilla/pac.cpp
