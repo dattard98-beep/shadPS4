@@ -155,6 +155,18 @@ void SetServer(const std::string& server) {
     if (resolved) {
         Log(LogLevel::Info,
             "Relay: using relay server " + server + " (" + EndpointText(*resolved) + ")");
+        // 146.112.61.104-110 are Cisco OpenDNS / Umbrella "blocked site" pages: this PC's DNS
+        // filter hid the relay's real address, so relayed matches cannot work.
+        if (resolved->Family() == AF_INET) {
+            const u32 ip =
+                ntohl(reinterpret_cast<const sockaddr_in*>(&resolved->addr)->sin_addr.s_addr);
+            if ((ip & 0xFFFFFFF8u) == 0x92703D68u) { // 146.112.61.104/29
+                Log(LogLevel::Error,
+                    "Relay: this PC's DNS filter (OpenDNS) blocks the relay's address, so the "
+                    "relay will not work. Change the PC's or router's DNS to 1.1.1.1 or 8.8.8.8, "
+                    "or set relay_server to the relay's IP address instead of its name.");
+            }
+        }
     } else {
         Log(LogLevel::Error,
             "Relay: cannot resolve relay_server '" + server + "' (expected host:port)");

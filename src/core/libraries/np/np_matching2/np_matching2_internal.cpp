@@ -438,6 +438,15 @@ void* BuildSearchRoomPayload(ContextObject& ctx, CallbackPayload& p,
     std::vector<int> visible;
     visible.reserve(static_cast<size_t>(resp.rooms_size()));
     for (int i = 0; i < resp.rooms_size(); ++i) {
+        // A room we host ourselves is left over from a crash or a quick restart: joining it
+        // fails ("already joined"), so it is never shown.
+        const std::string self(ctx.online_id.data,
+                               strnlen(ctx.online_id.data, sizeof(ctx.online_id.data)));
+        if (!self.empty() && resp.rooms(i).owner_npid() == self) {
+            LOG_INFO(Lib_NpMatching2, "Search: hiding our own old room {}",
+                     resp.rooms(i).room_id());
+            continue;
+        }
         if (IsGhostRoom(resp.rooms(i).room_id())) {
             LOG_INFO(Lib_NpMatching2, "Search: hiding dead room {}", resp.rooms(i).room_id());
             continue;
