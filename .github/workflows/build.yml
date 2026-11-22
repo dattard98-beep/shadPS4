@@ -172,7 +172,7 @@ jobs:
           cache-name: ${{ runner.os }}-sdl-cache-cmake-build
       with:
         append-timestamp: false
-        key: ${{ env.cache-name }}-${{ hashFiles('**/CMakeLists.txt', 'cmake/**') }}
+        key: ${{ env.cache-name }}-vs2022-${{ hashFiles('**/CMakeLists.txt', 'cmake/**') }}
 
     - name: Print CPU Info
       run: bash -c "cat /proc/cpuinfo"
