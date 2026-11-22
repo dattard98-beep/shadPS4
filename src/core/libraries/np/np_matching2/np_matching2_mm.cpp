@@ -302,7 +302,7 @@ void DispatchRequestComplete(const PendingRequest& pr, ShadNet::ErrorType error,
 
     const s32 error_code = ToSceError(error);
     if (error_code != ORBIS_OK) {
-        LOG_INFO(Lib.NpMatching2,
+        LOG_INFO(Lib_NpMatching2,
                  "request {} (event {:#x}) failed on the server: error {} -> {:#x}", pr.req_id,
                  static_cast<u32>(pr.req_event), static_cast<u32>(error),
                  static_cast<u32>(error_code));
