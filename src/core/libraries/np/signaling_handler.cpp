@@ -186,6 +186,12 @@ void ProcessSignalingPacket(const void* data, u32 len, u32 from_addr, u16 from_p
                 transport.probe_sample_write_index % NpSignaling::PeerTransport::kProbeSampleCount;
             transport.probe_rtt_samples[idx] = rtt_us;
             transport.probe_sample_write_index = idx + 1;
+            ++transport.report_pings_answered;
+            transport.report_total_rtt_us += rtt_us;
+            if (transport.report_rtt_min_us < 0 || rtt_us < transport.report_rtt_min_us) {
+                transport.report_rtt_min_us = rtt_us;
+            }
+            transport.report_rtt_max_us = std::max(transport.report_rtt_max_us, rtt_us);
         }
         return;
     }
@@ -288,6 +294,46 @@ u32 PublishSignalingInfo() {
     return sent_count;
 }
 
+bool IsPrivateAddr(u32 addr_nbo) {
+    const u32 a = Net::sceNetNtohl(addr_nbo);
+    return (a >> 24) == 10 || (a >> 20) == (172 << 4 | 1) || (a >> 16) == (192 << 8 | 168);
+}
+
+// Every 30 s while connected: the round trip to the peer and how many pings got no answer.
+void ReportRoundTripLocked(NpSignaling::PeerTransport& t, s64 now_us) {
+    constexpr s64 kFirstReportUs = 10'000'000;
+    constexpr s64 kReportIntervalUs = 30'000'000;
+    if (t.last_report_us == 0) {
+        t.last_report_us = now_us - kReportIntervalUs + kFirstReportUs;
+        return;
+    }
+    if (now_us - t.last_report_us < kReportIntervalUs || t.report_pings_sent < 2) {
+        return;
+    }
+    const char* path = Net::P2PRelayIsActive(RelaySessionLocked(t)) ? "relay"
+                       : IsPrivateAddr(t.addr)                      ? "local network"
+                                                                    : "direct";
+    // The last ping may still be on its way.
+    const u32 sent = t.report_pings_sent - 1;
+    const u32 answered = std::min(t.report_pings_answered, sent);
+    const u32 lost_pct = sent == 0 ? 0 : (sent - answered) * 100 / sent;
+    if (answered == 0) {
+        LOG_WARNING(Lib_NpSignaling, "Ping: '{}' ({}): no answers to the last {} pings",
+                    OnlineIdString(t.online_id), path, sent);
+    } else {
+        LOG_INFO(Lib_NpSignaling,
+                 "Ping: '{}' ({}): round trip {} ms (fastest {}, slowest {}), {}% of pings lost",
+                 OnlineIdString(t.online_id), path, t.report_total_rtt_us / answered / 1000,
+                 t.report_rtt_min_us / 1000, t.report_rtt_max_us / 1000, lost_pct);
+    }
+    t.last_report_us = now_us;
+    t.report_pings_sent = 1;
+    t.report_pings_answered = 0;
+    t.report_total_rtt_us = 0;
+    t.report_rtt_min_us = -1;
+    t.report_rtt_max_us = -1;
+}
+
 void SendEchoPings() {
     constexpr s64 kEchoIntervalUs = 1'000'000;
 
@@ -313,6 +359,8 @@ void SendEchoPings() {
                 continue;
             }
             transport.last_echo_ping_us = now;
+            ++transport.report_pings_sent;
+            ReportRoundTripLocked(transport, now);
             targets.push_back({transport_id, transport.addr, transport.port, now});
         }
     }

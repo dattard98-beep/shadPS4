@@ -157,6 +157,13 @@ struct PeerTransport {
     u32 probe_sample_write_index = 0;
 
     s64 last_echo_ping_us = 0;
+    // Round-trip report over the last period: pings sent and answered, fastest and slowest.
+    u32 report_pings_sent = 0;
+    u32 report_pings_answered = 0;
+    s32 report_rtt_min_us = -1;
+    s32 report_rtt_max_us = -1;
+    s64 report_total_rtt_us = 0;
+    s64 last_report_us = 0;
     s64 last_peer_rx_us = 0;
     s64 last_handshake_send_us = 0;
 
