@@ -255,6 +255,44 @@ std::string ExtractProtoBytes(const std::vector<u8>& payload, size_t offset = 0)
     return std::string(reinterpret_cast<const char*>(payload.data() + offset + 4), len);
 }
 
+// The game treats only negative codes as failures; a raw server number (14 for a room that
+// is gone, say) reads as success and the game then uses room data that is not there.
+s32 ToSceError(ShadNet::ErrorType error) {
+    using E = ShadNet::ErrorType;
+    switch (error) {
+    case E::NoError:
+        return ORBIS_OK;
+    case E::RoomMissing:
+        return ORBIS_NP_MATCHING2_SERVER_ERROR_NO_SUCH_ROOM;
+    case E::RoomAlreadyJoined:
+        return ORBIS_NP_MATCHING2_SERVER_ERROR_ALREADY_JOINED;
+    case E::RoomFull:
+        return ORBIS_NP_MATCHING2_SERVER_ERROR_ROOM_FULL;
+    case E::RoomPasswordMismatch:
+        return ORBIS_NP_MATCHING2_SERVER_ERROR_PASSWORD_MISMATCH;
+    case E::RoomPasswordMissing:
+        return ORBIS_NP_MATCHING2_SERVER_ERROR_NO_PASSWORD;
+    case E::RoomGroupFull:
+        return ORBIS_NP_MATCHING2_SERVER_ERROR_GROUP_FULL;
+    case E::RoomGroupNoJoinLabel:
+    case E::RoomGroupJoinLabelNotFound:
+    case E::RoomGroupMaxSlotMismatch:
+        return ORBIS_NP_MATCHING2_SERVER_ERROR_NO_ROOMGROUP;
+    case E::Blocked:
+        return ORBIS_NP_MATCHING2_SERVER_ERROR_BLOCKED;
+    case E::Unauthorized:
+        return ORBIS_NP_MATCHING2_SERVER_ERROR_FORBIDDEN;
+    case E::Malformed:
+    case E::Invalid:
+    case E::InvalidInput:
+        return ORBIS_NP_MATCHING2_SERVER_ERROR_BAD_REQUEST;
+    case E::TooSoon:
+        return ORBIS_NP_MATCHING2_SERVER_ERROR_BUSY;
+    default:
+        return ORBIS_NP_MATCHING2_SERVER_ERROR_INTERNAL_SERVER_ERROR;
+    }
+}
+
 void DispatchRequestComplete(const PendingRequest& pr, ShadNet::ErrorType error,
                              const std::vector<u8>& body) {
     auto ctx = NpHandler::GetInstance().GetMatching2ContextManager().Get(pr.ctx_id);
@@ -262,7 +300,13 @@ void DispatchRequestComplete(const PendingRequest& pr, ShadNet::ErrorType error,
         return;
     }
 
-    const s32 error_code = (error == ShadNet::ErrorType::NoError) ? 0 : static_cast<s32>(error);
+    const s32 error_code = ToSceError(error);
+    if (error_code != ORBIS_OK) {
+        LOG_INFO(Lib.NpMatching2,
+                 "request {} (event {:#x}) failed on the server: error {} -> {:#x}", pr.req_id,
+                 static_cast<u32>(pr.req_event), static_cast<u32>(error),
+                 static_cast<u32>(error_code));
+    }
 
     if (pr.req_event == ORBIS_NP_MATCHING2_CONTEXT_EVENT_STARTED ||
         pr.req_event == ORBIS_NP_MATCHING2_CONTEXT_EVENT_STOPPED) {
