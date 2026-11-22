@@ -206,6 +206,13 @@ A few noteworthy teams/projects who've helped us along the way are:
 
 - [**emudev.org**](https://emudev.org/): A network of people interested in the documentation, emulation, simulation and re-implementation of hardware near extinction . Belongs to my friend skmp and me (shadow) also a member of it
 
+# Godzilla online credits
+
+This fork's Godzilla (CUSA02046 / CUSA02058) additions build on other people's work:
+
+- [**Minus Two**](https://github.com/gminustwo/minustwo) (GPL-2.0): the exact vector math on every CPU (`src/core/godzilla/exact_math.*`), the render thread's GPU wait (`src/core/godzilla/label_wait.*`) and the steady movie clock (`src/core/libraries/avplayer/avplayer_source.*`) are adapted from its code and research.
+- **shadPS4** and its contributors, for the emulator this fork is built on, including shadNet.
+
 # License
 
 - [**GPL-2.0 license**](https://github.com/shadps4-emu/shadPS4/blob/main/LICENSE)
