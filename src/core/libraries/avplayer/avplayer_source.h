@@ -1,4 +1,5 @@
 // SPDX-FileCopyrightText: Copyright 2024 shadPS4 Emulator Project
+// SPDX-FileCopyrightText: Copyright 2026 Minus Two contributors
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #pragma once
@@ -12,6 +13,7 @@
 #include <stop_token>
 #include <string_view>
 #include <utility>
+#include <vector>
 
 #include "common/assert.h"
 #include "core/libraries/avplayer/avplayer.h"
@@ -115,6 +117,16 @@ struct Frame {
     AvPlayerFrameInfoEx info;
 };
 
+/ a decoded video frame waiting in host memory(NV12 as the game gets it);
+it is
+    /// copied to one of the game's frame buffers when it is handed out.
+    struct VideoFrame {
+    std::vector<u8> data;
+    AvPlayerFrameInfoEx info;
+    /// The presentation time in milliseconds, unrounded (info.timestamp is whole ms).
+    double time_ms = 0.0;
+};
+
 class EventCV {
 public:
     template <class Pred>
@@ -165,6 +177,9 @@ public:
     bool GetVideoData(AvPlayerFrameInfo& video_info);
     bool GetVideoData(AvPlayerFrameInfoEx& video_info);
     u64 CurrentTime();
+    /the playback clock in milliseconds at `at` (wall time since the start or the
+    /// last loop, without pauses).
+    double ClockMs(std::chrono::high_resolution_clock::time_point at) const;
     bool IsActive();
 
 private:
@@ -195,7 +210,7 @@ private:
     AVFramePtr ConvertVideoFrame(const AVFrame& frame);
 
     Frame PrepareAudioFrame(GuestBuffer buffer, const AVFrame& frame);
-    Frame PrepareVideoFrame(GuestBuffer buffer, const AVFrame& frame);
+    VideoFrame PrepareVideoFrame(const AVFrame& frame);
 
     AvPlayerStateCallback& m_state;
 
@@ -217,15 +232,18 @@ private:
     std::unique_ptr<IDataStreamer> m_up_data_streamer;
 
     AvPlayerQueue<GuestBuffer> m_audio_buffers;
-    AvPlayerQueue<GuestBuffer> m_video_buffers;
+    the game's video frame buffers, handed out in turn: the buffer of a frame is
+    // written again only after the others were (see GetVideoData); the size of one.
+    std::vector<GuestBuffer> m_video_buffers;
+    size_t m_next_video_buffer = 0;
+    u32 m_video_buffer_size = 0;
 
     AvPlayerQueue<AVPacketPtr> m_audio_packets;
     AvPlayerQueue<AVPacketPtr> m_video_packets;
 
     AvPlayerQueue<Frame> m_audio_frames;
-    AvPlayerQueue<Frame> m_video_frames;
+    AvPlayerQueue<VideoFrame> m_video_frames;
 
-    std::optional<Frame> m_current_video_frame;
     std::optional<Frame> m_current_audio_frame;
 
     std::optional<s32> m_video_stream_index{};
@@ -250,11 +268,19 @@ private:
     SWRContextPtr m_swr_context{nullptr, &ReleaseSWRContext};
     SWSContextPtr m_sws_context{nullptr, &ReleaseSWSContext};
 
-    std::optional<u64> m_last_audio_ts{};
-    std::optional<std::chrono::high_resolution_clock::time_point> m_last_data_time{};
     std::optional<std::chrono::high_resolution_clock::time_point> m_start_time{};
     std::chrono::high_resolution_clock::time_point m_pause_time{};
     std::chrono::high_resolution_clock::duration m_pause_duration{};
+    the clock's origin (stream time at m_start_time); how far it was set back for
+    // audio that fell behind, and that it was (both set by the audio side); the video clock the
+    // game's asks read (stream ms) and the instant of the ask it last stepped at (filtered); the
+    // last frame handed out.
+    u64 m_clock_base_ts = 0;
+    std::atomic<s64> m_audio_lag_ns{0};
+    std::atomic_bool m_clock_resync{false};
+    std::optional<double> m_video_clock{};
+    std::chrono::high_resolution_clock::time_point m_video_clock_time{};
+    std::optional<u64> m_last_video_ts{};
 };
 
 } // namespace Libraries::AvPlayer

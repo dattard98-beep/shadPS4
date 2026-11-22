@@ -1,5 +1,10 @@
 // SPDX-FileCopyrightText: Copyright 2024-2026 shadPS4 Emulator Project
+// SPDX-FileCopyrightText: Copyright 2026 Minus Two contributors
 // SPDX-License-Identifier: GPL-2.0-or-later
+
+#include <algorithm>
+#include <chrono>
+#include <cmath>
 
 #include "common/alignment.h"
 #include "common/singleton.h"
@@ -282,8 +287,10 @@ bool AvPlayerSource::Start() {
         const auto pitch = Common::AlignUp<u32>(m_video_codec_context->width, 64);
         const auto height = Common::AlignUp<u32>(m_video_codec_context->height, 16);
         const auto size = (pitch * height * 3) / 2;
+        m_video_buffer_size = size;
+        m_next_video_buffer = 0;
         for (u64 index = 0; index < m_max_num_video_framebuffers; ++index) {
-            m_video_buffers.Push(GuestBuffer(m_memory_replacement, 0x100, size, true));
+            m_video_buffers.emplace_back(m_memory_replacement, 0x100, size, true);
         }
     }
     if (m_audio_stream_index) {
@@ -318,6 +325,10 @@ bool AvPlayerSource::Start() {
     m_video_decoder_thread.Run([this](std::stop_token stop) { this->VideoDecoderThread(stop); });
     m_audio_decoder_thread.Run([this](std::stop_token stop) { this->AudioDecoderThread(stop); });
     m_start_time = std::chrono::high_resolution_clock::now();
+    m_clock_base_ts = 0;
+    m_audio_lag_ns = 0;
+    m_video_clock.reset();
+    m_last_video_ts.reset();
     return true;
 }
 
@@ -338,18 +349,19 @@ bool AvPlayerSource::Stop() {
     m_demuxer_thread.Stop();
 
     m_current_audio_frame.reset();
-    m_current_video_frame.reset();
 
-    m_video_buffers.Clear();
+    m_video_buffers.clear();
     m_audio_buffers.Clear();
     m_audio_packets.Clear();
     m_video_packets.Clear();
     m_audio_frames.Clear();
     m_video_frames.Clear();
 
-    m_last_audio_ts.reset();
-    m_last_data_time.reset();
     m_start_time.reset();
+    m_clock_base_ts = 0;
+    m_audio_lag_ns = 0;
+    m_video_clock.reset();
+    m_last_video_ts.reset();
     m_pause_time = {};
     m_pause_duration = {};
 
@@ -388,28 +400,66 @@ bool AvPlayerSource::GetVideoData(AvPlayerFrameInfoEx& video_info) {
         return false;
     }
 
-    if (m_video_frames.Size() == 0) {
+    if (m_video_frames.Size() == 0 || m_video_buffers.empty()) {
         return false;
     }
 
-    const auto current_time = CurrentTime();
+    // The game asks once per frame (60 Hz). Its asks come a little early or late, and with a
+    // clock read at the moment of each ask, a frame due near an ask was handed out at that ask or
+    // the next one by chance: frames held one vsync, then three (the movies stuttered). The video
+    // clock steps by whole 60 Hz periods from ask to ask instead, and follows wall time through a
+    // slow correction, so the timing of single asks no longer decides.
+    using namespace std::chrono;
+    using Ms = duration<double, std::milli>;
+    constexpr double period = 1000.0 / 60.0;
+    const auto now = high_resolution_clock::now();
     const auto& new_frame = m_video_frames.Front();
+    // A loop starts the timestamps again: the clock follows the stream.
+    if (m_last_video_ts && new_frame.info.timestamp + 500 < *m_last_video_ts) {
+        m_clock_base_ts = new_frame.info.timestamp;
+        m_start_time = now;
+        m_pause_duration = {};
+        m_audio_lag_ns = 0;
+        m_video_clock.reset();
+    }
+    const double wall = ClockMs(now);
+    if (!m_video_clock || m_clock_resync.exchange(false) ||
+        std::abs(wall - *m_video_clock) > 100.0) {
+        // The start, a loop, a pause, a hitch or a wait for the audio: the wall clock as it is.
+        m_video_clock = wall;
+        m_video_clock_time = now;
+    } else {
+        const double since = Ms(now - m_video_clock_time).count();
+        const double periods = std::round(since / period);
+        if (periods >= 1.0) {
+            const double advanced = *m_video_clock + periods * period;
+            m_video_clock = advanced + (wall - advanced) / 64.0;
+            const double phase = since - periods * period;
+            m_video_clock_time +=
+                duration_cast<high_resolution_clock::duration>(Ms(periods * period + phase / 8.0));
+        }
+    }
+    const double clock = *m_video_clock;
     if (m_state.GetSyncMode() == AvPlayerAvSyncMode::Default) {
-        if (new_frame.info.timestamp > current_time) {
+        if (new_frame.time_ms > clock) {
             return false;
         }
     }
-
-    if (m_current_video_frame.has_value()) {
-        m_video_buffers.Push(std::move(m_current_video_frame->buffer));
-        m_current_video_frame.reset();
-        m_video_buffers_cv.Notify();
-    }
+    m_last_video_ts = new_frame.info.timestamp;
 
     auto frame = m_video_frames.Pop();
-    video_info = frame->info;
+    m_video_buffers_cv.Notify();
 
-    m_current_video_frame = std::move(frame);
+    // The frame goes into the game's buffers in turn, now. The game still draws the previous
+    // frame for one more refresh, so a buffer is written again only after all the others were;
+    // decoded frames wait in host memory.
+    auto& buffer = m_video_buffers[m_next_video_buffer++ % m_video_buffers.size()];
+    std::memcpy(buffer.GetBuffer(), frame->data.data(),
+                std::min<u64>(buffer.Size(), frame->data.size()));
+    Core::Memory::Instance()->InvalidateMemory(reinterpret_cast<VAddr>(buffer.GetBuffer()),
+                                               buffer.Size());
+    video_info = frame->info;
+    video_info.p_data = buffer.GetBuffer();
     return true;
 }
 
@@ -429,9 +479,15 @@ bool AvPlayerSource::GetAudioData(AvPlayerFrameInfo& audio_info) {
     }
 
     auto frame = m_audio_frames.Pop();
-    m_last_audio_ts = frame->info.timestamp;
-    m_last_data_time = std::chrono::high_resolution_clock::now();
-    m_pause_duration = std::chrono::high_resolution_clock::duration(0);
+    // The clock runs on wall time. Audio the game takes clearly behind it (the game stalled and
+    // the sound ran dry) sets it back, so the picture waits for the sound. More than a second
+    // behind is a loop the video has not reached yet.
+    const double behind =
+        ClockMs(std::chrono::high_resolution_clock::now()) - double(frame->info.timestamp);
+    if (behind > 50.0 && behind < 1000.0) {
+        m_audio_lag_ns += s64(behind * 1e6);
+        m_clock_resync = true;
+    }
 
     audio_info = {};
     audio_info.timestamp = frame->info.timestamp;
@@ -494,22 +550,24 @@ u64 AvPlayerSource::CurrentTime() {
         return 0;
     }
 
-    using namespace std::chrono;
-    const auto now = m_is_paused.load() ? m_pause_time : high_resolution_clock::now();
-    if (m_audio_stream_index) {
-        const auto last_audio = m_last_data_time.value_or(now);
-        const auto elapsed =
-            duration_cast<milliseconds>(now - last_audio - m_pause_duration).count();
-        return m_last_audio_ts.value_or(0) + elapsed;
-    }
-
-    const auto elapsed =
-        duration_cast<milliseconds>(now - m_start_time.value() - m_pause_duration).count();
-    if (elapsed <= 0) {
+    // Wall time since the start (or the last loop) without pauses, smooth and to the microsecond.
+    const double clock = ClockMs(std::chrono::high_resolution_clock::now());
+    if (clock <= 0.0) {
         return 0;
     }
-    const auto current_time = u64(elapsed);
+    const auto current_time = u64(clock);
     return m_duration != 0 && current_time > m_duration ? m_duration : current_time;
+}
+
+double AvPlayerSource::ClockMs(std::chrono::high_resolution_clock::time_point at) const {
+    using namespace std::chrono;
+    if (!m_start_time.has_value()) {
+        return 0.0;
+    }
+    const auto now = m_is_paused.load() ? m_pause_time : at;
+    return double(m_clock_base_ts) +
+           duration<double, std::milli>(now - m_start_time.value() - m_pause_duration).count() -
+           double(m_audio_lag_ns.load()) / 1e6;
 }
 
 bool AvPlayerSource::IsActive() {
@@ -675,27 +733,42 @@ static u64 FrameTimestampMillis(const AVFrame& frame, AVRational time_base) {
     return millis > 0 ? u64(millis) : 0;
 }
 
-Frame AvPlayerSource::PrepareVideoFrame(GuestBuffer buffer, const AVFrame& frame) {
+// The frame's time unrounded: 29.97 fps frames are 33.367 ms apart, and whole milliseconds put
+// them up to half a millisecond off, enough to decide which ask shows a frame.
+static double FrameTimeMs(const AVFrame& frame, AVRational time_base) {
+    auto timestamp = frame.best_effort_timestamp;
+    if (timestamp == AV_NOPTS_VALUE) {
+        timestamp = frame.pts;
+    }
+    if (timestamp == AV_NOPTS_VALUE) {
+        timestamp = frame.pkt_dts;
+    }
+    if (timestamp == AV_NOPTS_VALUE || timestamp < 0 || time_base.den <= 0) {
+        return 0.0;
+    }
+    return double(timestamp) * 1000.0 * time_base.num / time_base.den;
+}
+
+VideoFrame AvPlayerSource::PrepareVideoFrame(const AVFrame& frame) {
     ASSERT(frame.format == AV_PIX_FMT_NV12);
 
-    auto p_buffer = buffer.GetBuffer();
-    Videodec::CopyNV12Data(p_buffer, buffer.Size(), frame);
+    std::vector<u8> data(m_video_buffer_size);
+    Videodec::CopyNV12Data(data.data(), data.size(), frame);
 
     const auto stream_index = m_streams[m_video_stream_index.value()].ffmpeg_index;
     const auto stream = m_avformat_context->streams[stream_index];
     const auto timestamp = FrameTimestampMillis(frame, stream->time_base);
+    const double time_ms = FrameTimeMs(frame, stream->time_base);
 
     const auto width = Common::AlignUp<u32>(frame.width, 16);
     const auto pitch = Common::AlignUp<u32>(frame.width, 64);
     const auto height = Common::AlignUp<u32>(frame.height, 16);
-    Core::Memory::Instance()->InvalidateMemory(reinterpret_cast<VAddr>(p_buffer),
-                                               (width * height * 3) / 2);
 
-    return Frame{
-        .buffer = std::move(buffer),
+    return VideoFrame{
+        .data = std::move(data),
         .info =
             {
-                .p_data = p_buffer,
+                .p_data = nullptr, // the game's buffer, when it is handed out
                 .timestamp = timestamp,
                 .details =
                     {
@@ -715,6 +788,7 @@ Frame AvPlayerSource::PrepareVideoFrame(GuestBuffer buffer, const AVFrame& frame
                             },
                     },
             },
+        .time_ms = time_ms,
     };
 }
 
@@ -741,8 +815,11 @@ void AvPlayerSource::VideoDecoderThread(std::stop_token stop) {
             return;
         }
         while (res >= 0) {
-            if (m_video_buffers.Size() == 0 &&
-                !m_video_buffers_cv.Wait(stop, [this] { return m_video_buffers.Size() != 0; })) {
+            // Decodes as many frames ahead as the game has buffers.
+            const auto room = [this] {
+                return m_video_frames.Size() < m_max_num_video_framebuffers;
+            };
+            if (!room() && !m_video_buffers_cv.Wait(stop, room)) {
                 break;
             }
             auto up_frame = AVFramePtr(av_frame_alloc(), &ReleaseAVFrame);
@@ -759,9 +836,7 @@ void AvPlayerSource::VideoDecoderThread(std::stop_token stop) {
                     return;
                 }
             } else {
-                auto buffer = m_video_buffers.Pop();
-                if (!buffer.has_value()) {
-                    // Video buffers queue was cleared. This means that player was stopped.
+                if (stop.stop_requested()) {
                     break;
                 }
                 if (up_frame->format != AV_PIX_FMT_NV12) {
@@ -770,9 +845,9 @@ void AvPlayerSource::VideoDecoderThread(std::stop_token stop) {
                         m_state.OnError();
                         return;
                     }
-                    m_video_frames.Push(PrepareVideoFrame(std::move(buffer.value()), *nv12_frame));
+                    m_video_frames.Push(PrepareVideoFrame(*nv12_frame));
                 } else {
-                    m_video_frames.Push(PrepareVideoFrame(std::move(buffer.value()), *up_frame));
+                    m_video_frames.Push(PrepareVideoFrame(*up_frame));
                 }
                 m_video_frames_cv.Notify();
             }
