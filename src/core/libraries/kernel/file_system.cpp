@@ -35,6 +35,7 @@
 #include "core/file_sys/devices/zero_device.h"
 #include "core/file_sys/directories/normal_directory.h"
 #include "core/file_sys/directories/pfs_directory.h"
+#include "core/file_sys/backends/host_fs.h"
 #include "core/file_sys/fs.h"
 #include "core/libraries/kernel/file_system.h"
 #include "core/libraries/kernel/orbis_error.h"
@@ -263,10 +264,12 @@ s32 PS4_SYSV_ABI open(const char* raw_path, s32 flags, u16 mode) {
     bool read_only = false;
     file->m_guest_name = path;
     file->m_host_name = mnt->GetHostPath(file->m_guest_name, &read_only);
+    // Godzilla online: the opponent's monster may come from a temporary patched copy.
+    std::optional<std::filesystem::path> mod_redirect;
     if (read && !create) {
-        // Godzilla online: the opponent's monster may come from a temporary patched copy.
-        if (auto redirected = Libraries::Np::GodzillaMods::Redirect(file->m_guest_name)) {
-            file->m_host_name = *redirected;
+        mod_redirect = Libraries::Np::GodzillaMods::Redirect(file->m_guest_name);
+        if (mod_redirect) {
+            file->m_host_name = *mod_redirect;
         }
     }
     bool exists = mnt->Exists(file->m_guest_name);
@@ -376,7 +379,13 @@ s32 PS4_SYSV_ABI open(const char* raw_path, s32 flags, u16 mode) {
             access_mode = Common::FS::FileAccessMode::Read;
         }
 
-        file->handle = mnt->Open(file->m_guest_name, access_mode);
+        if (mod_redirect) {
+            // Read the patched copy itself; the mount would serve the game folder's file.
+            file->handle = std::make_unique<Core::FileSys::HostFile>(
+                *mod_redirect, Common::FS::FileAccessMode::Read, true);
+        } else {
+            file->handle = mnt->Open(file->m_guest_name, access_mode);
+        }
         if (!file->handle || !file->handle->IsOpen()) {
             h->DeleteHandle(handle);
             auto mount = mnt->GetMount(raw_path);
