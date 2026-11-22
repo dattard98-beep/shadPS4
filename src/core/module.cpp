@@ -12,6 +12,7 @@
 #include "core/aerolib/aerolib.h"
 #include "core/cpu_patches.h"
 #include "core/godzilla/exact_math.h"
+#include "core/godzilla/label_wait.h"
 #include "core/godzilla/mirror_patch.h"
 #include "core/libraries/error_codes.h"
 #include "core/loader/dwarf.h"
@@ -126,6 +127,13 @@ void Module::ApplyGodzillaMirrorPatch() {
                  "Godzilla: exact math on every CPU: {} of {} reciprocal estimates rewritten "
                  "({} left as they are, {} other forms seen)",
                  math.rewritten, math.found, math.skipped, math.other);
+        const u32 waits = Core::Godzilla::LabelWait::Apply(code, phdr.p_filesz, [this](u64 size) {
+            return AllocateTrampolineMemory(reinterpret_cast<void*>(base_virtual_addr), size);
+        });
+        LOG_INFO(Core_Linker,
+                 "Godzilla: render thread sleeps while it waits for the GPU ({} of 4 "
+                 "wait loops replaced)",
+                 waits);
 #endif
         const bool applied =
             Core::Godzilla::MirrorPatch::Apply(code, phdr.p_filesz, GetAlignedSize(phdr), &message);

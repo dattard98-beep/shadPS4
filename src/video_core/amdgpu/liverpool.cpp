@@ -10,6 +10,7 @@
 #include "common/thread.h"
 #include "core/debug_state.h"
 #include "core/emulator_settings.h"
+#include "core/godzilla/label_wait.h"
 #include "core/libraries/kernel/process.h"
 #include "core/libraries/videoout/driver.h"
 #include "core/memory.h"
@@ -728,6 +729,7 @@ Liverpool::Task Liverpool::ProcessGraphics(std::span<const u32> dcb) {
                     auto* memory = Core::Memory::Instance();
                     ASSERT(memory->TryWriteBacking(address, &data, num_bytes));
                 });
+                Core::Godzilla::LabelWait::NotifyGpuWrite();
                 if (event_eos->command == PM4CmdEventWriteEos::Command::GdsStore) {
                     ASSERT(event_eos->size == 1);
                     if (rasterizer) {
@@ -749,6 +751,7 @@ Liverpool::Task Liverpool::ProcessGraphics(std::span<const u32> dcb) {
                         ASSERT(memory->TryWriteBacking(address, &data, num_bytes));
                     },
                     [] { Platform::IrqC::Instance()->Signal(Platform::InterruptId::GfxEop); });
+                Core::Godzilla::LabelWait::NotifyGpuWrite();
                 break;
             }
             case PM4ItOpcode::DmaData: {
@@ -1225,6 +1228,7 @@ Liverpool::Task Liverpool::ProcessCompute(std::span<const u32> acb, u32 vqid) {
                 [this](VAddr dst, u16 gds_index, u16 num_dwords) {
                     rasterizer->CopyBuffer(dst, gds_index, num_dwords * sizeof(u32), false, true);
                 });
+            Core::Godzilla::LabelWait::NotifyGpuWrite();
             break;
         }
         case PM4ItOpcode::EventWrite: {
