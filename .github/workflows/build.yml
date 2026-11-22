@@ -155,16 +155,8 @@ jobs:
       with:
         submodules: recursive
 
-    - name: Cache CMake Configuration
-      uses: actions/cache@v5
-      env:
-          cache-name: ${{ runner.os }}-sdl-ninja-cache-cmake-configuration
-      with:
-          path: |
-            ${{github.workspace}}/build
-          key: ${{ env.cache-name }}-${{ hashFiles('**/CMakeLists.txt', 'cmake/**') }}
-          restore-keys: |
-            ${{ env.cache-name }}-
+    # No cached build folder here: its precompiled headers go stale against a fresh checkout
+    # ("has been modified since the precompiled header was built"). ccache below is enough.
 
     - name: Cache CMake Build
       uses: hendrikmuhs/ccache-action@v1.2.21
