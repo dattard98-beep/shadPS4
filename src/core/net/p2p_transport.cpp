@@ -147,6 +147,9 @@ std::shared_ptr<Transport> Transport::Create(int family, const Endpoint& bind_ad
     const int buffer = 1 << 20; // absorb bursts
     setsockopt(t->socket_, SOL_SOCKET, SO_RCVBUF, reinterpret_cast<const char*>(&buffer),
                sizeof(buffer));
+    const int broadcast = 1; // LAN discovery of peers behind the same router
+    setsockopt(t->socket_, SOL_SOCKET, SO_BROADCAST, reinterpret_cast<const char*>(&broadcast),
+               sizeof(broadcast));
     sockaddr_storage actual{};
     socklen_t actual_len = sizeof(actual);
     getsockname(t->socket_, reinterpret_cast<sockaddr*>(&actual), &actual_len);

@@ -4,6 +4,7 @@
 #include "core/libraries/np/signaling_handler.h"
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
@@ -922,6 +923,31 @@ void LogUnknownHandshakePeer(const std::string& from_id, u32 from_addr, u16 from
              from_id, from_addr, Net::sceNetNtohs(from_port));
 }
 
+// Players behind the same router often cannot reach each other through its public address. While
+// nothing has been heard from the peer, also offer on the local network; a peer there answers from
+// its local address, which the handshake then keeps using.
+void SendLanOfferLocked(NpSignaling::PeerTransport& transport, u32 round) {
+    const u32 local = Net::GetP2PAdvertisedAddr();
+    if (local == 0) {
+        return;
+    }
+    if (round == 0) {
+        LOG_INFO(Lib_NpSignaling, "Signaling: also looking for '{}' on the local network",
+                 OnlineIdString(transport.online_id));
+    }
+    const u32 subnet_broadcast = local | Net::sceNetHtonl(0xff);
+    const auto pkt = MakeHandshakeLocked(transport, NpSignaling::HandshakeKind::Offer);
+    std::array<u16, 2> ports{transport.port, Net::sceNetHtons(Net::GetP2PBoundPort())};
+    for (const u32 addr : {subnet_broadcast, Net::sceNetHtonl(0xffffffff)}) {
+        for (size_t i = 0; i < ports.size(); ++i) {
+            if (ports[i] == 0 || (i == 1 && ports[1] == ports[0])) {
+                continue;
+            }
+            NpSignaling::Transport::SignalingSendTo(&pkt, sizeof(pkt), addr, ports[i]);
+        }
+    }
+}
+
 // Port prediction for routers that hand out public ports in sequence: while nothing has been
 // heard from the peer, also send an offer to ports next to the reported one (+1, -1, +2, -2 ...
 // up to 8 away). If one gets through, the peer answers and its real endpoint is learned.
@@ -934,6 +960,7 @@ void SendPredictedPortProbe(s32 transport_id) {
         return;
     }
     const u32 round = transport->punch_round++;
+    SendLanOfferLocked(*transport, round);
     constexpr u32 kDirectRounds = 2; // give the reported port about a second first
     if (round < kDirectRounds) {
         return;
